@@ -1,0 +1,956 @@
+---
+title: "Integration of cervical cancer genomics data from cBioportal - HIV-HPV_cooperation_project"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Initialize functions}
+#Load libraries
+library(ggplot2)
+library(data.table)
+library(ComplexHeatmap)
+library(circlize)
+library(ggrepel)
+library(ggsignif)
+library(dplyr)
+library(ggvenn)
+library(ggpubr)
+library(janitor)
+library(RColorBrewer)
+library(stringr)
+library(tidyr)
+library(forcats)
+library(stringi)
+library(rstatix)
+library(ggprism)
+
+```
+
+#Prepare a List of SIFs and HIV preys for Downstream Analyses
+
+```{r Load secreted inflamm. factors, HIV, HPV, HIV-HPV preys from AP-MS experiments}
+#Load inflammatory factors in ART patients
+HIV_inflamm_molec = fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Inflammatory_molecules_DEP_ARTvsHC.txt", header = T)
+
+# Load secreted proteins from Human Protein Atlas database
+HPA_1 = read.table('~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Protein_predicted_secreted_HPA.txt',header=T,sep='\t')
+HPA_2 = read.table('~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Protein_predicted_secretedmembrane_HPA.txt',header=T,sep='\t')
+HPA_secreted_prots = rbind(HPA_1, HPA_2) # all secreted proteins
+
+#Filter to select secreted inflammatory molecules
+inflamm_prots_secreted = as.data.frame(intersect(HIV_inflamm_molec$Genes,HPA_secreted_prots$Gene))
+colnames(inflamm_prots_secreted) = c("gene") 
+
+#Extract human proteins that interact only with HIV
+Krogan_PPI <- read.table("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Krogan_HIV_HPV_AP-MS_interactome.txt", header = T, sep = '\t')
+HIV_gene_list1 <- unique(Krogan_PPI$PreyGeneName[Krogan_PPI$pathogen=='HIV'])
+
+HPV_gene_list1 <- unique(Krogan_PPI$PreyGeneName[Krogan_PPI$pathogen=='HPV'])
+
+intersecting_HIV_HPV_preys = intersect(HIV_gene_list1, HPV_gene_list1)
+
+HIV_gene_list_2 = as.data.frame(c(setdiff(HIV_gene_list1, intersecting_HIV_HPV_preys),setdiff(intersecting_HIV_HPV_preys, HIV_gene_list1)))
+colnames(HIV_gene_list_2) = c("gene")
+
+```
+
+#Extracting Patient IDs from Cervical Cancer TCGA Firehose Legacy Study Per Grade/stage
+
+```{r Extract patient IDs from the TCGA Firehose Legacy cervical cancer study}
+#Load the TCGA firehose Legacy cervical cancer clinical data downloaded from cBioPortal (https://www.cbioportal.org/study/clinicalData?id=cesc_tcga)
+TCGA_firehose_Legacy_clinical_data = read.delim("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/TCGA_firehose_Legacy_clinical_data_31May2022_10amgmt.tsv")
+
+#Extract patient IDs corresponding to various cervical cancer grades
+G_1_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$Neoplasm.Histologic.Grade == 'G1']))
+G_1_patient_IDs = na.omit(G_1_patient_IDs) #clean the data
+
+#save out patient IDs for the grades
+fwrite(G_1_patient_IDs, "Grade_1_firehose_patientIDs.txt", sep = '\t')
+
+G_2_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$Neoplasm.Histologic.Grade == 'G2']))
+G_2_patient_IDs = na.omit(G_2_patient_IDs) #clean the data
+
+#save out patient IDs for the grades
+fwrite(G_2_patient_IDs, "Grade_2_firehose_patientIDs.txt", sep = '\t')
+
+G_3_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$Neoplasm.Histologic.Grade == 'G3']))
+G_3_patient_IDs = na.omit(G_3_patient_IDs) #clean the data
+
+#save out patient IDs for the grades
+fwrite(G_3_patient_IDs, "Grade_3_firehose_patientIDs.txt", sep = '\t')
+
+#-----------------------------------------------------------------------------------------------
+#Extract patient IDs corresponding to various sub-stage 1 of cervical cancer
+Stage_I_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1']))
+colnames(Stage_I_patient_IDs) = c("stage1")
+
+Stage_IA_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1a']))
+colnames(Stage_IA_patient_IDs) = c("stage1")
+
+Stage_IA1_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1a1']))
+colnames(Stage_IA1_patient_IDs) = c("stage1")
+
+Stage_IA2_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1a2']))
+colnames(Stage_IA2_patient_IDs) = c("stage1")
+
+Stage_IB_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1b']))
+colnames(Stage_IB_patient_IDs) = c("stage1")
+
+Stage_IB1_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1b1']))
+colnames(Stage_IB1_patient_IDs) = c("stage1")
+
+Stage_IB2_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1b2']))
+colnames(Stage_IB2_patient_IDs) = c("stage1")
+
+Stage_IB3_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1b3']))
+colnames(Stage_IB3_patient_IDs) = c("stage1")
+
+#merge, clean and save out all the sub-stage 1 IDs into one data frame
+stage_I_cc_IDs = rbind(Stage_I_patient_IDs, Stage_IA_patient_IDs, Stage_IA1_patient_IDs, Stage_IA2_patient_IDs, Stage_IB_patient_IDs, Stage_IB1_patient_IDs, Stage_IB2_patient_IDs, Stage_IB3_patient_IDs)
+
+stage_I_cc_IDs = na.omit(stage_I_cc_IDs)
+
+#save out patient IDs
+fwrite(stage_I_cc_IDs, "Stage_I_firehose_patientIDs.txt", sep = '\t')
+
+#----------------------------------------------------------------------------------------------------------------------
+#Extract patient IDs corresponding to various sub-stage 2 of cervical cancer
+Stage_II_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2']))
+colnames(Stage_II_patient_IDs) = c("stage2")
+
+Stage_IIA_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2a']))
+colnames(Stage_IIA_patient_IDs) = c("stage2")
+
+Stage_IIA1_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2a1']))
+colnames(Stage_IIA1_patient_IDs) = c("stage2")
+
+Stage_IIA2_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2a2']))
+colnames(Stage_IIA2_patient_IDs) = c("stage2")
+
+Stage_IIB_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2b']))
+colnames(Stage_IIB_patient_IDs) = c("stage2")
+
+#merge, clean and save out all the sub-stage 2 IDs into one data frame
+stage_II_cc_IDs = rbind(Stage_II_patient_IDs, Stage_IIA_patient_IDs, Stage_IIA1_patient_IDs, Stage_IIA2_patient_IDs, Stage_IIB_patient_IDs)
+stage_II_cc_IDs = na.omit(stage_II_cc_IDs)
+
+#save out patient IDs
+fwrite(stage_II_cc_IDs, "Stage_II_firehose_patientIDs.txt", sep = '\t')
+
+#-----------------------------------------------------------------------------------------------------------------------
+#Extract patient IDs corresponding to various sub-stage 3 of cervical cancer
+Stage_III_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T3']))
+colnames(Stage_III_patient_IDs) = c("stage3")
+
+Stage_IIIA_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T3a']))
+colnames(Stage_IIIA_patient_IDs) = c("stage3")
+
+Stage_IIIB_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T3b']))
+colnames(Stage_IIIB_patient_IDs) = c("stage3")
+
+#merge, clean and save out all the sub-stage 3 IDs into one data frame
+stage_III_cc_IDs = rbind(Stage_III_patient_IDs, Stage_IIIA_patient_IDs, Stage_IIIB_patient_IDs)
+stage_III_cc_IDs = na.omit(stage_III_cc_IDs)
+
+#save out patient IDs
+fwrite(stage_III_cc_IDs, "Stage_III_firehose_patientIDs.txt", sep = '\t')
+
+#-----------------------------------------------------------------------------------------------------------------------
+#Extract patient IDs corresponding to various sub-stage 4 of cervical cancer
+Stage_IV_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T4']))
+colnames(Stage_IV_patient_IDs) = c("stage4")
+
+Stage_IVA_patient_IDs = as.data.frame(unique(TCGA_firehose_Legacy_clinical_data$Patient.ID[TCGA_firehose_Legacy_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'm1']))
+colnames(Stage_IVA_patient_IDs) = c("stage4")
+
+#merge, clean and save out all the sub-stage 4 IDs into one data frame
+stage_IV_cc_IDs = rbind(Stage_IV_patient_IDs, Stage_IVA_patient_IDs)
+stage_IV_cc_IDs = na.omit(stage_IV_cc_IDs)
+
+#save out patient IDs
+fwrite(stage_IV_cc_IDs, "Stage_IV_firehose_patientIDs.txt", sep = '\t')#extract mut and CNA data using the IDs
+
+#NOTE: Use the saved IDs per grade/stage to extract mutation and CNA data from CC firehose legacy study from cBioPortal
+
+```
+
+#Extracting Patient IDs from Cervical Cancer TCGA Pancancer Study Per Grade/stage
+
+```{r Extract patient IDs from the TCGA Pancancer cervical cancer study}
+##Load the TCGA Pancancer cervical cancer clinical data downloaded from cBioPortal (https://www.cbioportal.org/study/clinicalData?id=cesc_tcga_pan_can_atlas_2018)
+TCGA_Pancancer_Atlas_clinical_data = read.delim("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/TCGA_Pancancer_Atlas_clinical_data_31May2022_10amgmt.tsv")
+#---------------------------------------------------------------------------------------------------------------------
+
+#Extract patient IDs corresponding to various cervical cancer grades
+G_1_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$Neoplasm.Histologic.Grade == 'G1']))
+G_1_patient_IDs = na.omit(G_1_patient_IDs)
+
+#save out patient IDs for the grades
+fwrite(G_1_patient_IDs, "Grade_1_pancancer_patientIDs.txt", sep = '\t')
+
+G_2_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$Neoplasm.Histologic.Grade == 'G2']))
+G_2_patient_IDs = na.omit(G_2_patient_IDs)
+
+#save out patient IDs for the grades
+fwrite(G_2_patient_IDs, "Grade_2_pancancer_patientIDs.txt", sep = '\t')
+
+G_3_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$Neoplasm.Histologic.Grade == 'G3']))
+G_3_patient_IDs = na.omit(G_3_patient_IDs)
+
+#save out patient IDs for the grades
+fwrite(G_3_patient_IDs, "Grade_3_pancancer_patientIDs.txt", sep = '\t')
+
+#------------------------------------------------------------------------------------------------
+#Extract patient IDs corresponding to various sub-stage 1 of cervical cancer
+Stage_I_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1']))
+colnames(Stage_I_patient_IDs) = c("stage1")
+
+Stage_IA_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1A']))
+colnames(Stage_IA_patient_IDs) = c("stage1")
+
+Stage_IA1_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1A1']))
+colnames(Stage_IA1_patient_IDs) = c("stage1")
+
+Stage_IA2_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1A2']))
+colnames(Stage_IA2_patient_IDs) = c("stage1")
+
+Stage_IB_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1B']))
+colnames(Stage_IB_patient_IDs) = c("stage1")
+
+Stage_IB1_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1B1']))
+colnames(Stage_IB1_patient_IDs) = c("stage1")
+
+Stage_IB2_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1B2']))
+colnames(Stage_IB2_patient_IDs) = c("stage1")
+
+Stage_IB3_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T1B3']))
+colnames(Stage_IB3_patient_IDs) = c("stage1")
+
+#merge, clean and save out all the sub-stage 1 IDs into one data frame
+stage_I_cc_IDs = rbind(Stage_I_patient_IDs, Stage_IA_patient_IDs, Stage_IA1_patient_IDs, Stage_IA2_patient_IDs, Stage_IB_patient_IDs, Stage_IB1_patient_IDs, Stage_IB2_patient_IDs, Stage_IB3_patient_IDs)
+stage_I_cc_IDs = na.omit(stage_I_cc_IDs) #clean data
+
+#save out IDs
+fwrite(stage_I_cc_IDs, "Stage_I_pancancer_patientIDs.txt", sep = '\t')
+
+#-----------------------------------------------------------------------------------------------
+#Extract patient IDs corresponding to various sub-stage 2 of cervical cancer
+Stage_II_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2']))
+colnames(Stage_II_patient_IDs) = c("stage2")
+
+Stage_IIA_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2A']))
+colnames(Stage_IIA_patient_IDs) = c("stage2")
+
+Stage_IIA1_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2A1']))
+colnames(Stage_IIA1_patient_IDs) = c("stage2")
+
+Stage_IIA2_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2A2']))
+colnames(Stage_IIA2_patient_IDs) = c("stage2")
+
+Stage_IIB_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T2B']))
+colnames(Stage_IIB_patient_IDs) = c("stage2")
+
+#merge, clean and save out all the sub-stage 2 IDs into one data frame
+stage_II_cc_IDs = rbind(Stage_II_patient_IDs, Stage_IIA_patient_IDs, Stage_IIA1_patient_IDs, Stage_IIA2_patient_IDs, Stage_IIB_patient_IDs)
+stage_II_cc_IDs = na.omit(stage_II_cc_IDs)
+
+#save out IDs
+fwrite(stage_II_cc_IDs, "Stage_II_pancancer_patientIDs.txt", sep = '\t')
+
+#-----------------------------------------------------------------------------------------------
+#Extract patient IDs corresponding to various sub-stage 3 of cervical cancer
+Stage_III_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T3']))
+colnames(Stage_III_patient_IDs) = c("stage3")
+
+Stage_IIIA_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T3A']))
+colnames(Stage_IIIA_patient_IDs) = c("stage3")
+
+Stage_IIIB_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T3B']))
+colnames(Stage_IIIB_patient_IDs) = c("stage3")
+
+#merge, clean and save out all the sub-stage 3 IDs into one data frame
+stage_III_cc_IDs = rbind(Stage_III_patient_IDs, Stage_IIIA_patient_IDs, Stage_IIIB_patient_IDs)
+stage_III_cc_IDs = na.omit(stage_III_cc_IDs)
+
+#save out IDs
+fwrite(stage_III_cc_IDs, "Stage_III_pancancer_patientIDs.txt", sep = '\t')#extract mut and CNA data using the IDs
+
+#-----------------------------------------------------------------------------------------------
+#Extract patient IDs corresponding to various sub-stage 4 of cervical cancer
+Stage_IV_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'T4']))
+colnames(Stage_IV_patient_IDs) = c("stage4")
+
+Stage_IVA_patient_IDs = as.data.frame(unique(TCGA_Pancancer_Atlas_clinical_data$Patient.ID[TCGA_Pancancer_Atlas_clinical_data$American.Joint.Committee.on.Cancer.Tumor.Stage.Code == 'M1']))
+colnames(Stage_IVA_patient_IDs) = c("stage4")
+
+#merge, clean and save out all the sub-stage 4 IDs into one data frame
+stage_IV_cc_IDs = rbind(Stage_IV_patient_IDs, Stage_IVA_patient_IDs)
+stage_IV_cc_IDs = na.omit(stage_IV_cc_IDs)
+
+#save out IDs
+fwrite(stage_IV_cc_IDs, "Stage_IV_pancancer_patientIDs.txt", sep = '\t')
+
+#NOTE: Use the saved IDs per grade/stage to extract mutation and CNA data from CC Pancancer study from cBioPortal
+
+```
+
+#Extract mutation Frequency for Each of the HIV preys/SIFs Across Grades/stages From Mutation Data Downloaded from cBioPortal
+
+```{r Load and clean mutation data from each of the two cervical cancer datasets from cBioPortal}
+#firehose Legacy: Load mutated genes for grades and stages of CC obtained from cBioPortal using the patient IDs
+#Grades
+G_1 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_G1_firehose.txt", header = T, sep = '\t'))
+G_1$Frequency_1 = G_1$number/G_1$profiled_samples * 100 #rework mutation frequencies
+
+G_2 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_G2_firehose.txt", header = T, sep = '\t'))
+G_2$Frequency_1 = G_2$number/G_2$profiled_samples * 100 #rework mutation frequencies
+
+G_3 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_G3_firehose.txt",  header = T, sep = '\t'))
+G_3$Frequency_1 = G_3$number/G_3$profiled_samples * 100 #rework mutation frequencies
+
+#Stages
+S_1 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_S1_firehose.txt", header = T, sep = '\t'))
+S_1$Frequency_1 = S_1$number/S_1$profiled_samples * 100 #rework mutation frequencies
+
+S_2 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_S2_firehose.txt", header = T, sep = '\t'))
+S_2$Frequency_1 = S_2$number/S_2$profiled_samples * 100 #rework mutation frequencies
+
+S_3 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_S3_firehose.txt", header = T, sep = '\t'))
+S_3$Frequency_1 = S_3$number/S_3$profiled_samples * 100 #rework mutation frequencies
+
+S_4 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_S4_firehose.txt", header = T, sep = '\t'))
+S_4$Frequency_1 = S_4$number/S_4$profiled_samples * 100 #rework mutation frequencies
+
+#-----------------------------------------------------------------------------------------------------------------------------------------
+#TCGA Pancancer: Load mutated genes for grades and stages of CC obtained from cBioPortal using the patient IDs
+#Grades
+G_1_2 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_G1_pancancer.txt", header = T, sep = '\t'))
+G_1_2$Frequency_2 = G_1_2$number/G_1_2$profiled_samples * 100 #rework mutation frequencies
+
+G_2_2 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_G2_pancancer.txt", header = T, sep = '\t'))
+G_2_2$Frequency_2 = G_2_2$number/G_2_2$profiled_samples * 100 #rework mutation frequencies
+
+G_3_2 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_G3_pancancer.txt", header = T, sep = '\t'))
+G_3_2$Frequency_2 = G_3_2$number/G_3_2$profiled_samples * 100 #rework mutation frequencies
+
+#.............................................................................................
+#Stages
+S_1_2 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_S1_pancancer.txt", header = T, sep = '\t'))
+S_1_2$Frequency_2 = S_1_2$number/S_1_2$profiled_samples * 100 #rework mutation frequencies
+
+S_2_2 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_S2_pancancer.txt", header = T, sep = '\t'))
+S_2_2$Frequency_2 = S_2_2$number/S_2_2$profiled_samples * 100 #rework mutation frequencies
+
+S_3_2 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_S3_pancancer.txt", header = T, sep = '\t'))
+S_3_2$Frequency_2 = S_3_2$number/S_3_2$profiled_samples * 100 #rework mutation frequencies
+
+S_4_2 <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Mutated_Genes_S4_pancancer.txt", header = T, sep = '\t'))
+S_4_2$Frequency_2 = S_4_2$number/S_4_2$profiled_samples * 100 #rework mutation frequencies
+#----------------------------------------------------------------------------------------------------------
+
+#Match SIF or HIV preys list with mutation data extracted using patient IDs across grades and stages
+special_list = inflamm_prots_secreted #uncomment if running SIFs
+#special_list = HIV_gene_list_2 #HIV preys #Uncomment if running HIV preys
+
+#Grade I
+grade_sub1 = special_list %>%
+  left_join(G_1_2, by='gene') %>%
+    left_join(G_1, by='gene')
+grade_sub1$Frequency = (grade_sub1$Frequency_1 + grade_sub1$Frequency_2) / 2 #avg mut freq from two studies
+
+#Replace the NAs in Frequency with values from Frequency_1
+grade_sub1$Frequency[is.na(grade_sub1$Frequency)] <- grade_sub1$Frequency_2[is.na(grade_sub1$Frequency)]
+grade_sub1 = subset(grade_sub1, !duplicated(grade_sub1[,1])) # delete any duplicates
+
+#Grade II
+grade_sub2 = special_list %>%
+  left_join(G_2_2, by='gene') %>%
+    left_join(G_2, by='gene')
+grade_sub2$Frequency = (grade_sub2$Frequency_1 + grade_sub2$Frequency_2) / 2 #avg mut freq from two studies
+
+#Replace the NAs in Frequency with values from Frequency_1
+grade_sub2$Frequency[is.na(grade_sub2$Frequency)] <- grade_sub2$Frequency_2[is.na(grade_sub2$Frequency)]
+grade_sub2 = subset(grade_sub2, !duplicated(grade_sub2[,1])) # delete any duplicates
+
+#Grade III
+grade_sub3 = special_list %>%
+  left_join(G_3_2, by='gene') %>%
+    left_join(G_3, by='gene')
+grade_sub3$Frequency = (grade_sub3$Frequency_1 + grade_sub3$Frequency_2) / 2 #avg mut freq from two studies
+
+#Replace the NAs in Frequency with values from Frequency_1
+grade_sub3$Frequency[is.na(grade_sub3$Frequency)] = grade_sub3$Frequency_2[is.na(grade_sub3$Frequency)]
+grade_sub3 = subset(grade_sub3, !duplicated(grade_sub3[,1])) # delete any duplicates
+#............................................................................
+
+#Stages
+#Stage I
+stage_sub1 = special_list %>%
+  left_join(S_1_2, by='gene') %>%
+    left_join(S_1, by='gene')
+stage_sub1$Frequency = (stage_sub1$Frequency_1 + stage_sub1$Frequency_2) / 2 #avg mut freq from two studies
+
+#Replace the NAs in Frequency with values from Frequency_1
+stage_sub1$Frequency[is.na(stage_sub1$Frequency)] = stage_sub1$Frequency_2[is.na(stage_sub1$Frequency)]
+stage_sub1 = subset(stage_sub1, !duplicated(stage_sub1[,1])) # delete any duplicates
+
+#Stage II
+stage_sub2 = special_list %>%
+  left_join(S_2_2, by='gene') %>%
+    left_join(S_2, by='gene')
+stage_sub2$Frequency = (stage_sub2$Frequency_1 + stage_sub2$Frequency_2) / 2 #avg mut freq from two studies
+
+#Replace the NAs in Frequency with values from Frequency_1
+stage_sub2$Frequency[is.na(stage_sub2$Frequency)] = stage_sub2$Frequency_2[is.na(stage_sub2$Frequency)]
+stage_sub2 = subset(stage_sub2, !duplicated(stage_sub2[,1])) # delete any duplicates
+
+#Stage III
+stage_sub3 = special_list %>%
+  left_join(S_3_2, by='gene') %>%
+    left_join(S_3, by='gene')
+stage_sub3$Frequency = (stage_sub3$Frequency_1 + stage_sub3$Frequency_2) / 2 #avg mut freq from two studies
+
+#Replace the NAs in Frequency with values from Frequency_1
+stage_sub3$Frequency[is.na(stage_sub3$Frequency)] = stage_sub3$Frequency_2[is.na(stage_sub3$Frequency)]
+stage_sub3 = subset(stage_sub3, !duplicated(stage_sub3[,1])) # delete any duplicates
+
+#Stage IV
+stage_sub4 = special_list %>%
+  left_join(S_4_2, by='gene') %>%
+    left_join(S_4, by='gene')
+stage_sub4$Frequency = (stage_sub4$Frequency_1 + stage_sub4$Frequency_2) / 2 #avg mut freq from two studies
+
+#Replace the NAs in Frequency with values from Frequency_1
+stage_sub4$Frequency[is.na(stage_sub4$Frequency)] = stage_sub4$Frequency_2[is.na(stage_sub4$Frequency)]
+stage_sub4 = subset(stage_sub4, !duplicated(stage_sub4[,1])) # delete any duplicates
+
+```
+
+#Prepare Ranked Heatmaps for Mutation frequencies per SIF/HIV Preys Across Grades/Stages
+
+```{r Construct complex heatmaps for mutation frequencies}
+#Prepare data and extract mutation frequency per gene
+#Grades
+Grade_one = grade_sub1 %>% dplyr::select(gene, Frequency)
+setnames(Grade_one, "Frequency", "G1") #rename the column freq as G1..
+
+Grade_two = grade_sub2 %>% dplyr::select(gene, Frequency)
+setnames(Grade_two, "Frequency", "G2")
+
+Grade_three = grade_sub3 %>% dplyr::select(gene, Frequency)
+setnames(Grade_three, "Frequency", "G3")
+
+#merge all grade dataframes into one big dataset
+super_merged_muts = special_list %>%
+    left_join(Grade_one, by ='gene') %>%
+    left_join(Grade_two, by = "gene") %>%
+    left_join(Grade_three, by = "gene")
+super_merged_muts_clean_1 = subset(super_merged_muts, !duplicated(super_merged_muts[,1])) # delete any duplicates
+super_merged_muts_clean = super_merged_muts_clean_1 %>% replace(is.na(.), 0)
+super_merged_muts_clean$Avg = rowMeans(super_merged_muts_clean[ ,2:4]) #calculate rowmeans
+
+#Select top 20 genes for visualization on the heatmap
+super_merged_muts_clean_df_sorted = super_merged_muts_clean %>% arrange(desc(Avg))
+super_merged_muts_clean1 = super_merged_muts_clean_df_sorted[1:20,]
+super_merged_muts_clean2 = super_merged_muts_clean_df_sorted[1:20,]
+
+#heatmap1 for rowsums
+super_merged_muts_clean1$Avg = NULL
+giant_mut_sorted_dataset_clean = super_merged_muts_clean1
+
+#heatmap2 for Avg only
+giant_mut_sorted_dataset_clean_2 = dplyr::select(super_merged_muts_clean2, -c('G1', 'G2', 'G3')) #delete G1-G3 columns
+
+#prepare dataframe matrix
+row.names(giant_mut_sorted_dataset_clean) <- giant_mut_sorted_dataset_clean$gene
+giant_mut_sorted_dataset_clean$gene <- NULL
+
+row.names(giant_mut_sorted_dataset_clean_2) <- giant_mut_sorted_dataset_clean_2$gene
+giant_mut_sorted_dataset_clean_2$gene <- NULL
+
+#Convert dataframes into matrix
+h_overall_1 <- data.matrix(giant_mut_sorted_dataset_clean)
+h_overall_2 <- data.matrix(giant_mut_sorted_dataset_clean_2)
+
+#Define a color scheme for the categories
+col_1 = colorRamp2(seq(min(h_overall_1), max(h_overall_1), length = 3), c("#EEEEEE", "firebrick1", "firebrick4"))
+col_2 = colorRamp2(seq(min(h_overall_2), max(h_overall_2), length = 3), c("gray100", "gray", "grey0"))
+
+#overall mut data
+hm_overall_1 = Heatmap(h_overall_1, name = "Mut freq", col = col_1, row_order = order(rowMeans(h_overall_1), decreasing = TRUE), cluster_columns = FALSE, column_names_gp = gpar(fontsize = 11), row_names_gp = gpar(fontsize=11), rect_gp = gpar(col = "grey", lwd = 1) ,
+              heatmap_legend_param = list (
+                direction = "horizontal",
+                title_position = "topcenter"))
+
+hm_overall_2 = Heatmap(h_overall_2, name = "Aver_mut_freq", col = col_2, row_order = order(rowMeans(h_overall_2), decreasing = TRUE), cluster_columns = FALSE, column_names_gp = gpar(fontsize = 11), row_names_gp = gpar(fontsize=11), rect_gp = gpar(col = "gray", lwd = 1),
+              heatmap_legend_param = list (
+                direction = "horizontal",
+                title_position = "topcenter"))
+
+hm_combined = hm_overall_1 + hm_overall_2
+draw(hm_combined, heatmap_legend_side = "right")
+
+#print out the heatmap
+pdf(file = "Figure 6A-Mutation_heatmap_CC_grades_inflamm_HPV.pdf",width=2.76, height=3.24,useDingbats = FALSE) #for SIFs
+#pdf(file = "Figure 7A-Mutation_heatmap_CC_grades_HIV_HPV.pdf",width=3.29, height=3.24,useDingbats = FALSE) #for HIV preys
+
+print(hm_combined)
+dev.off()
+
+#stages
+Stage_one = stage_sub1 %>% dplyr::select(gene, Frequency)
+setnames(Stage_one, "Frequency", "S1")
+
+Stage_two = stage_sub2 %>% dplyr::select(gene, Frequency)
+setnames(Stage_two, "Frequency", "S2")
+
+Stage_three = stage_sub3 %>% dplyr::select(gene, Frequency)
+setnames(Stage_three, "Frequency", "S3")
+
+Stage_four = stage_sub4 %>% dplyr::select(gene, Frequency)
+setnames(Stage_four, "Frequency", "S4")
+
+#-----------------------------------------------
+
+super_merged_muts_stages = special_list %>%
+    left_join(Stage_one, by='gene') %>%
+    left_join(Stage_two, by='gene') %>%
+    left_join(Stage_three, by='gene') %>%
+    left_join(Stage_four, by='gene')
+super_merged_muts_clean.s_1 = subset(super_merged_muts_stages, !duplicated(super_merged_muts_stages[,1])) # delete any duplicates
+super_merged_muts_clean.s = super_merged_muts_clean.s_1 %>% replace(is.na(.), 0)
+super_merged_muts_clean.s$Avg = rowMeans(super_merged_muts_clean.s[ ,2:5]) #calculate rowmeans
+
+#Select top 20 genes for visualization on the heatmap
+super_merged_muts_clean_df_sorted.s = super_merged_muts_clean.s %>% arrange(desc(Avg))
+super_merged_muts_clean1.s = super_merged_muts_clean_df_sorted.s[1:20,]
+super_merged_muts_clean2.s = super_merged_muts_clean_df_sorted.s[1:20,]
+
+#heatmap1
+super_merged_muts_clean1.s$Avg = NULL
+giant_mut_sorted_dataset_clean.s = super_merged_muts_clean1.s
+
+#heatmap2 for Avg only
+giant_mut_sorted_dataset_clean_2.s = dplyr::select(super_merged_muts_clean2.s, -c('S1', 'S2', 'S3', 'S4')) #delete S1-S4 columns
+
+#prepare dataframe matrix
+row.names(giant_mut_sorted_dataset_clean.s) <- giant_mut_sorted_dataset_clean.s$gene
+giant_mut_sorted_dataset_clean.s$gene <- NULL
+
+row.names(giant_mut_sorted_dataset_clean_2.s) <- giant_mut_sorted_dataset_clean_2.s$gene
+giant_mut_sorted_dataset_clean_2.s$gene <- NULL
+
+#Convert dataframes into matrix
+h_overall_1.s <- data.matrix(giant_mut_sorted_dataset_clean.s)
+h_overall_2.s <- data.matrix(giant_mut_sorted_dataset_clean_2.s)
+
+#Stage mut data
+col_1.s = colorRamp2(seq(min(h_overall_1.s), max(h_overall_1.s), length = 3), c("#EEEEEE", "firebrick1", "firebrick4"))
+col_2.s = colorRamp2(seq(min(h_overall_2.s), max(h_overall_2.s), length = 3), c("gray100", "gray", "grey0"))
+
+hm_overall.s = Heatmap(h_overall_1.s, name = "Mut freq", col = col_1.s, row_order = order(rowMeans(h_overall_1.s), decreasing = TRUE), cluster_columns = FALSE,  column_names_gp = gpar(fontsize = 11), row_names_gp = gpar(fontsize=11), rect_gp = gpar(col = "gray", lwd = 1) ,
+               heatmap_legend_param = list (
+                direction = "horizontal",
+                title_position = "topcenter"))
+              
+hm_overall_2.s = Heatmap(h_overall_2.s, name = "Aver_mut_freq", col = col_2.s, row_order = order(rowMeans(h_overall_2.s), decreasing = TRUE), cluster_columns = FALSE, column_names_gp = gpar(fontsize = 11), row_names_gp = gpar(fontsize=11), rect_gp = gpar(col = "gray", lwd = 1),
+              heatmap_legend_param = list (
+                direction = "horizontal",
+                title_position = "topcenter"))
+
+hm_combined.s = hm_overall.s + hm_overall_2.s
+draw(hm_combined.s, heatmap_legend_side = "right")
+
+#print out the heatmap
+pdf(file = "Figure 6A-Mutation_heatmap_CC_stages_inflamm_HPV.pdf",width=2.76, height=3.24,useDingbats = FALSE) #for SIFs
+#pdf(file = "Figure 7A-Mutation_heatmap_CC_stages_HIV_HPV.pdf",width=3.47, height=3.24,useDingbats = FALSE) #for HIV preys
+
+print(hm_combined.s)
+dev.off()
+
+```
+
+#Extract CNA Frequencies for Each HIV prey/SIF Across Grades/stages From Mutation Data Downloaded from cBioPortal
+
+```{r Load and clean CNA data from each of the two cervical cancer datasets from cBioPortal}
+#firehose Legacy: Load CNA for grades and stages of CC obtained from cBioPortal using the patient IDs
+#Grades
+G_1cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_G1_firehose.txt", header = T, sep = '\t'))
+G_1cn$Frequency_1 = G_1cn$profiled_samples/G_1cn$number * 100 #rework CNA frequencies
+
+G_2cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_G2_firehose.txt", header = T, sep = '\t'))
+G_2cn$Frequency_1 = G_2cn$profiled_samples/G_2cn$number * 100 #rework CNA frequencies
+
+G_3cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_G3_firehose.txt",  header = T, sep = '\t'))
+G_3cn$Frequency_1 = G_3cn$profiled_samples/G_3cn$number * 100 #rework CNA frequencies
+
+#Stages
+#Legacy firehose dataset
+S_1cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_S1_firehose.txt", header = T, sep = '\t'))
+S_1cn$Frequency_1 = S_1cn$profiled_samples/S_1cn$number * 100 #rework CNA frequencies
+
+S_2cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_S2_firehose.txt", header = T, sep = '\t'))
+S_2cn$Frequency_1 = S_2cn$profiled_samples/S_2cn$number * 100 #rework CNA frequencies
+
+S_3cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_S3_firehose.txt", header = T, sep = '\t'))
+S_3cn$Frequency_1 = S_3cn$profiled_samples/S_3cn$number * 100 #rework CNA frequencies
+
+S_4cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_S4_firehose.txt", header = T, sep = '\t'))
+S_4cn$Frequency_1 = S_4cn$profiled_samples/S_4cn$number * 100 #rework CNA frequencies
+
+#-------------------------------------------------------------------------------------------------------------
+#TCGA Pancancer: Load mutated genes for grades and stages of CC obtained from cBioPortal using the patient IDs
+#Grades
+G_1_2cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_G1_pancancer.txt", header = T, sep = '\t'))
+G_1_2cn$Frequency_2 = G_1_2cn$profiled_samples/G_1_2cn$number * 100 #rework CNA frequencies
+
+G_2_2cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_G2_pancancer.txt", header = T, sep = '\t'))
+G_2_2cn$Frequency_2 = G_2_2cn$profiled_samples/G_2_2cn$number * 100 #rework CNA frequencies
+
+G_3_2cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_G3_pancancer.txt", header = T, sep = '\t'))
+G_3_2cn$Frequency_2 = G_3_2cn$profiled_samples/G_3_2cn$number * 100 #rework CNA frequencies
+
+#Stages
+S_1_2cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_S1_pancancer.txt", header = T, sep = '\t'))
+S_1_2cn$Frequency_2 = S_1_2cn$profiled_samples/S_1_2cn$number * 100 #rework CNA frequencies
+
+S_2_2cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_S2_pancancer.txt", header = T, sep = '\t'))
+S_2_2cn$Frequency_2 = S_2_2cn$profiled_samples/S_2_2cn$number * 100 #rework CNA frequencies
+
+S_3_2cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_S3_pancancer.txt", header = T, sep = '\t'))
+S_3_2cn$Frequency_2 = S_3_2cn$profiled_samples/S_3_2cn$number * 100 #rework CNA frequencies
+
+S_4_2cn <- clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CNA_Genes_S4_pancancer.txt", header = T, sep = '\t'))
+S_4_2cn$Frequency_2 = S_4_2cn$profiled_samples/S_4_2cn$number * 100 #rework CNA frequencies
+
+#------------------------------------------------------------------------------------------------------------------------------------
+#Match SIF or HIV preys list with CNA data extracted using patient IDs across grades and stages
+#Grades
+grade_sub1cn = special_list %>%
+  left_join(G_1_2cn, by='gene') %>%
+    left_join(G_1cn, by='gene')
+grade_sub1cn$Frequency = (grade_sub1cn$Frequency_1 + grade_sub1cn$Frequency_2) / 2
+
+#Replace the NAs in Frequency with values from Frequency_1
+grade_sub1cn$Frequency[is.na(grade_sub1cn$Frequency)] = grade_sub1cn$Frequency_2[is.na(grade_sub1cn$Frequency)]
+grade_sub1cn = subset(grade_sub1cn, !duplicated(grade_sub1cn[,1])) # delete any duplicates
+
+grade_sub2cn = special_list %>%
+  left_join(G_2_2cn, by='gene') %>%
+    left_join(G_2cn, by='gene')
+grade_sub2cn$Frequency = (grade_sub2cn$Frequency_1 + grade_sub2cn$Frequency_2) / 2
+
+#Replace the NAs in Frequency with values from Frequency_1
+grade_sub2cn$Frequency[is.na(grade_sub2cn$Frequency)] = grade_sub2cn$Frequency_2[is.na(grade_sub2cn$Frequency)]
+grade_sub2cn = subset(grade_sub2cn, !duplicated(grade_sub2cn[,1])) # delete any duplicates
+
+grade_sub3cn = special_list %>%
+  left_join(G_3_2cn, by='gene') %>%
+    left_join(G_3cn, by='gene')
+grade_sub3cn$Frequency = (grade_sub3cn$Frequency_1 + grade_sub3cn$Frequency_2) / 2
+
+#Replace the NAs in Frequency with values from Frequency_1
+grade_sub3cn$Frequency[is.na(grade_sub3cn$Frequency)] = grade_sub3cn$Frequency_2[is.na(grade_sub3cn$Frequency)]
+grade_sub3cn = subset(grade_sub3cn, !duplicated(grade_sub3cn[,1])) # delete any duplicates
+#............................................................................
+
+#Stages
+stage_sub1cn = special_list %>%
+  left_join(S_1_2cn, by='gene') %>%
+    left_join(S_1cn, by='gene')
+stage_sub1cn$Frequency = (stage_sub1cn$Frequency_1 + stage_sub1cn$Frequency_2) / 2
+
+#Replace the NAs in Frequency with values from Frequency_1
+stage_sub1cn$Frequency[is.na(stage_sub1cn$Frequency)] = stage_sub1cn$Frequency_2[is.na(stage_sub1cn$Frequency)]
+stage_sub1cn = subset(stage_sub1cn, !duplicated(stage_sub1cn[,1])) # delete any duplicates
+
+stage_sub2cn = special_list %>%
+  left_join(S_2_2cn, by='gene') %>%
+    left_join(S_2cn, by='gene')
+stage_sub2cn$Frequency = (stage_sub2cn$Frequency_1 + stage_sub2cn$Frequency_2) / 2
+
+#Replace the NAs in Frequency with values from Frequency_1
+stage_sub2cn$Frequency[is.na(stage_sub2cn$Frequency)] = stage_sub2cn$Frequency_2[is.na(stage_sub2cn$Frequency)]
+stage_sub2cn = subset(stage_sub2cn, !duplicated(stage_sub2cn[,1])) # delete any duplicates
+
+stage_sub3cn = special_list %>%
+  left_join(S_3_2cn, by='gene') %>%
+    left_join(S_3cn, by='gene')
+stage_sub3cn$Frequency = (stage_sub3cn$Frequency_1 + stage_sub3cn$Frequency_2) / 2
+
+#Replace the NAs in Frequency with values from Frequency_1
+stage_sub3cn$Frequency[is.na(stage_sub3cn$Frequency)] = stage_sub3cn$Frequency_2[is.na(stage_sub3cn$Frequency)]
+stage_sub3cn = subset(stage_sub3cn, !duplicated(stage_sub3cn[,1])) # delete any duplicates
+
+stage_sub4cn = special_list %>%
+  left_join(S_4_2cn, by='gene') %>%
+    left_join(S_4cn, by='gene')
+stage_sub4cn$Frequency = (stage_sub4cn$Frequency_1 + stage_sub4cn$Frequency_2) / 2
+
+#Replace the NAs in Frequency with values from Frequency_1
+stage_sub4cn$Frequency[is.na(stage_sub4cn$Frequency)] = stage_sub4cn$Frequency_2[is.na(stage_sub4cn$Frequency)]
+stage_sub4cn = subset(stage_sub4cn, !duplicated(stage_sub4cn[,1])) # delete any duplicates
+
+```
+
+#Prepare Ranked Heatmaps for CNA frequencies per SIF/HIV Preys Across Grades/Stages
+
+```{r Construct complex heatmaps for CNA frequencies}
+#Prepare data and extract CNA frequency per gene
+#Grades
+Grade_onecn = grade_sub1cn %>% dplyr::select(gene, Frequency)
+setnames(Grade_onecn, "Frequency", "G1")
+
+Grade_twocn = grade_sub2cn %>% dplyr::select(gene, Frequency)
+setnames(Grade_twocn, "Frequency", "G2")
+
+Grade_threecn = grade_sub3cn %>% dplyr::select(gene, Frequency)
+setnames(Grade_threecn, "Frequency", "G3")
+
+#--------------------------------------------------------------------
+
+#merge all into one big dataset
+#Grades
+super_merged_mutscn_grades = special_list %>%
+    left_join(Grade_onecn, by ='gene') %>%
+    left_join(Grade_twocn, by = "gene") %>%
+    left_join(Grade_threecn, by = "gene")
+super_merged_muts_cleancn_1 = subset(super_merged_mutscn_grades, !duplicated(super_merged_mutscn_grades[,1])) # delete any duplicates
+super_merged_muts_cleancn = super_merged_muts_cleancn_1 %>% replace(is.na(.), 0)
+super_merged_muts_cleancn$Avg = rowMeans(super_merged_muts_cleancn[ ,2:4]) #calculate rowmeans
+
+#Select top 20 genes for visualization on the heatmap
+super_merged_muts_clean_df_sorted = super_merged_muts_cleancn %>% arrange(desc(Avg))
+super_merged_muts_clean1cn = super_merged_muts_clean_df_sorted[1:20,]
+super_merged_muts_clean2cn = super_merged_muts_clean_df_sorted[1:20,]
+
+#heatmap1
+super_merged_muts_clean1cn$Avg = NULL
+giant_mut_sorted_dataset_cleancn = super_merged_muts_clean1cn
+
+#heatmap2 for Avg only
+giant_mut_sorted_dataset_clean_2cn = dplyr::select(super_merged_muts_clean2cn, -c('G1', 'G2', 'G3')) #delete G1-G3 columns
+
+#prepare dataframe matrix
+row.names(giant_mut_sorted_dataset_cleancn) <- giant_mut_sorted_dataset_cleancn$gene
+giant_mut_sorted_dataset_cleancn$gene <- NULL
+
+row.names(giant_mut_sorted_dataset_clean_2cn) <- giant_mut_sorted_dataset_clean_2cn$gene
+giant_mut_sorted_dataset_clean_2cn$gene <- NULL
+
+#Convert dataframes into matrix
+h_overall_1cn <- data.matrix(giant_mut_sorted_dataset_cleancn)
+h_overall_2cn <- data.matrix(giant_mut_sorted_dataset_clean_2cn)
+
+#--------------------------------------------------------------------------------------------
+
+#Define a color scheme for the categories
+col_1cn = colorRamp2(seq(min(h_overall_1cn), max(h_overall_1cn), length = 3), c("#EEEEEE", "firebrick1", "firebrick4"))
+col_2cn = colorRamp2(seq(min(h_overall_2cn), max(h_overall_2cn), length = 3), c("gray100", "gray", "grey0"))
+
+#overall cna data
+hm_overallcn = Heatmap(h_overall_1cn, name = "CNA freq", col = col_1cn, row_order = order(rowMeans(h_overall_1cn), decreasing = TRUE), cluster_columns = FALSE, column_names_gp = gpar(fontsize = 11), row_names_gp = gpar(fontsize=11), rect_gp = gpar(col = "grey", lwd = 1) ,
+              heatmap_legend_param = list (
+                direction = "horizontal",
+                title_position = "topcenter"))
+
+hm_overall_2cn = Heatmap(h_overall_2cn, name = "Aver_CNA_freq", col = col_2, row_order = order(rowMeans(h_overall_2cn), decreasing = TRUE), cluster_columns = FALSE, column_names_gp = gpar(fontsize = 11), row_names_gp = gpar(fontsize=11), rect_gp = gpar(col = "gray", lwd = 1),
+              heatmap_legend_param = list (
+                direction = "horizontal",
+                title_position = "topcenter"))
+
+hm_combinedcn = hm_overallcn + hm_overall_2cn
+draw(hm_combinedcn, heatmap_legend_side = "right")
+
+#print out the heatmap
+pdf(file = "Figure 6A-CNA_heatmap_CC_grades_inflamm_HPV.pdf",width=3.05, height=3.24,useDingbats = FALSE) #for SIFs
+#pdf(file = "Figure 7A-CNA_heatmap_CC_grades_HIV_HPV.pdf",width=3.61, height=3.24,useDingbats = FALSE) #for HIV preys
+
+print(hm_combinedcn)
+dev.off()
+
+#stages
+Stage_onecn = stage_sub1cn %>% dplyr::select(gene, Frequency)
+setnames(Stage_onecn, "Frequency", "S1")
+
+Stage_twocn = stage_sub2cn %>% dplyr::select(gene, Frequency)
+setnames(Stage_twocn, "Frequency", "S2")
+
+Stage_threecn = stage_sub3cn %>% dplyr::select(gene, Frequency)
+setnames(Stage_threecn, "Frequency", "S3")
+
+Stage_fourcn = stage_sub4cn %>% dplyr::select(gene, Frequency)
+setnames(Stage_fourcn, "Frequency", "S4")
+
+#Stages
+super_merged_mutscn_stages = special_list %>%
+    left_join(Stage_onecn, by='gene') %>%
+    left_join(Stage_twocn, by='gene') %>%
+    left_join(Stage_threecn, by='gene') %>%
+    left_join(Stage_fourcn, by='gene')
+super_merged_muts_clean.s_1cn = subset(super_merged_mutscn_stages, !duplicated(super_merged_mutscn_stages[,1])) # delete any duplicates
+super_merged_muts_clean.scn = super_merged_muts_clean.s_1cn %>% replace(is.na(.), 0)
+super_merged_muts_clean.scn$Avg = rowMeans(super_merged_muts_clean.scn[ ,2:5]) #calculate rowmeans
+
+#Select top 20 genes for visualization on the heatmap
+super_merged_muts_clean_df_sorted.scn = super_merged_muts_clean.scn %>% arrange(desc(Avg))
+super_merged_muts_clean1.scn = super_merged_muts_clean_df_sorted.scn[1:20,]
+super_merged_muts_clean2.scn = super_merged_muts_clean_df_sorted.scn[1:20,]
+
+#heatmap1
+super_merged_muts_clean1.scn$Avg = NULL
+giant_mut_sorted_dataset_clean.scn = super_merged_muts_clean1.scn
+
+#heatmap2 for Avg only
+giant_mut_sorted_dataset_clean_2.scn = dplyr::select(super_merged_muts_clean2.scn, -c('S1', 'S2', 'S3', 'S4')) #delete S1-S4 columns
+
+#prepare dataframe matrix
+row.names(giant_mut_sorted_dataset_clean.scn) <- giant_mut_sorted_dataset_clean.scn$gene
+giant_mut_sorted_dataset_clean.scn$gene <- NULL
+
+row.names(giant_mut_sorted_dataset_clean_2.scn) <- giant_mut_sorted_dataset_clean_2.scn$gene
+giant_mut_sorted_dataset_clean_2.scn$gene <- NULL
+
+#Convert dataframes into matrix
+h_overall_1.scn <- data.matrix(giant_mut_sorted_dataset_clean.scn)
+h_overall_2.scn <- data.matrix(giant_mut_sorted_dataset_clean_2.scn)
+
+col_1cn.s = colorRamp2(seq(min(h_overall_1.scn), max(h_overall_1.scn), length = 3), c("#EEEEEE", "firebrick1", "firebrick4"))
+col_2cn.s = colorRamp2(seq(min(h_overall_2.scn), max(h_overall_2.scn), length = 3), c("gray100", "gray", "grey0"))
+
+#overall cna data
+hm_overallcn.s = Heatmap(h_overall_1.scn, name = "CNA freq", col = col_1cn.s, row_order = order(rowMeans(h_overall_1.scn), decreasing = TRUE), cluster_columns = FALSE, column_names_gp = gpar(fontsize = 11), row_names_gp = gpar(fontsize=11), rect_gp = gpar(col = "grey", lwd = 1) ,
+              heatmap_legend_param = list (
+                direction = "horizontal",
+                title_position = "topcenter"))
+
+hm_overall_2cn.s = Heatmap(h_overall_2.scn, name = "Aver_CNA_freq", col = col_2, row_order = order(rowMeans(h_overall_2.scn), decreasing = TRUE), cluster_columns = FALSE, column_names_gp = gpar(fontsize = 11), row_names_gp = gpar(fontsize=11), rect_gp = gpar(col = "gray", lwd = 1),
+              heatmap_legend_param = list (
+                direction = "horizontal",
+                title_position = "topcenter"))
+
+hm_combinedcn.s = hm_overallcn.s + hm_overall_2cn.s
+draw(hm_combinedcn.s, heatmap_legend_side = "right")
+
+#print out the heatmap
+pdf(file = "Figure 6A-CNA_heatmap_CC_stages_inflamm_HPV.pdf",width=2.84, height=3.24,useDingbats = FALSE) #for SIFs
+#pdf(file = "Figure 7A-CNA_heatmap_CC_stages_HIV_HPV.pdf",width=3.57, height=3.24,useDingbats = FALSE) #for HIV preys
+
+print(hm_combinedcn.s)
+dev.off()
+
+```
+
+#EXTRA ANALYSES
+
+```{r Plots for sample per category per study}
+firehose_study = read.delim("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/TCGA_firehose_Legacy_clinical_data_31May2022_10amgmt.tsv")
+
+#crosstabulate grades
+firehose_Gs = firehose_study %>%
+  dplyr::count(Neoplasm.Histologic.Grade, sort = TRUE) %>% filter(
+ Neoplasm.Histologic.Grade == "G1" | Neoplasm.Histologic.Grade == "G2" | Neoplasm.Histologic.Grade == "G3")
+setnames(firehose_Gs, "Neoplasm.Histologic.Grade", "Dis_progress")
+firehose_Gs$TCGA_study = rep("Legacy Firehose", nrow(firehose_Gs))
+firehose_Gs$Classification = rep("Grades", nrow(firehose_Gs))
+
+#crosstabulate stages
+firehose_S1 = firehose_study %>%
+  dplyr::count(American.Joint.Committee.on.Cancer.Tumor.Stage.Code, sort = TRUE) %>% filter(
+ American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1a" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1a1" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1a2" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1b" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1b1" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1b2" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1b3")
+firehose_S1$stage = rep("S1", nrow(firehose_S1))
+
+firehose_S2 = firehose_study %>%
+  dplyr::count(American.Joint.Committee.on.Cancer.Tumor.Stage.Code, sort = TRUE) %>% filter(
+ American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2a" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2a1" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2a2" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2b")
+firehose_S2$stage = rep("S2", nrow(firehose_S2))
+
+firehose_S3 = firehose_study %>%
+  dplyr::count(American.Joint.Committee.on.Cancer.Tumor.Stage.Code, sort = TRUE) %>% filter(
+ American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T3" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T3a" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T3b")
+firehose_S3$stage = rep("S3", nrow(firehose_S3))
+
+firehose_S4 = firehose_study %>%
+  dplyr::count(American.Joint.Committee.on.Cancer.Tumor.Stage.Code, sort = TRUE) %>% filter(
+ American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T4" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "M1")
+firehose_S4$stage = rep("S4", nrow(firehose_S4))
+
+#merge sub-stages dataframes
+S_firall = rbind(firehose_S1, firehose_S2, firehose_S3, firehose_S4)
+
+#collapse the substage values per major stages
+firehose_Ss = aggregate(S_firall$n,
+by = list(S_firall$stage),
+FUN = function(x){sum(x,na.rm=T)})
+setnames(firehose_Ss, "Group.1", "Dis_progress")
+setnames(firehose_Ss, "x", "n")
+firehose_Ss$TCGA_study = rep("Legacy Firehose", nrow(firehose_Ss))
+firehose_Ss$Classification = rep("Stages", nrow(firehose_Ss))
+
+#----------------------------------------------------------------------
+
+pancancer_study = read.delim("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/TCGA_Pancancer_Atlas_clinical_data_31May2022_10amgmt.tsv")
+
+#crosstabulate grades
+pancancer_Gs = pancancer_study %>%
+  dplyr::count(Neoplasm.Histologic.Grade, sort = TRUE) %>% filter(
+ Neoplasm.Histologic.Grade == "G1" | Neoplasm.Histologic.Grade == "G2" | Neoplasm.Histologic.Grade == "G3")
+setnames(pancancer_Gs, "Neoplasm.Histologic.Grade", "Dis_progress")
+pancancer_Gs$TCGA_study = rep("Pancancer", nrow(pancancer_Gs))
+pancancer_Gs$Classification = rep("Grades", nrow(pancancer_Gs))
+
+#crosstabulate stages
+pancancer_S1 = pancancer_study %>%
+  dplyr::count(American.Joint.Committee.on.Cancer.Tumor.Stage.Code, sort = TRUE) %>% filter(
+ American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1A" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1A1" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1A2" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1B" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1B1" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1B2" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T1B3")
+pancancer_S1$stage = rep("S1", nrow(pancancer_S1))
+
+pancancer_S2 = pancancer_study %>%
+  dplyr::count(American.Joint.Committee.on.Cancer.Tumor.Stage.Code, sort = TRUE) %>% filter(
+ American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2A" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2A1" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2A2"| American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2B")
+pancancer_S2$stage = rep("S2", nrow(pancancer_S2))
+
+pancancer_S3 = pancancer_study %>%
+  dplyr::count(American.Joint.Committee.on.Cancer.Tumor.Stage.Code, sort = TRUE) %>% filter(
+ American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T3" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T3A" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T3B")
+pancancer_S3$stage = rep("S3", nrow(pancancer_S3))
+
+pancancer_S4 = pancancer_study %>%
+  dplyr::count(American.Joint.Committee.on.Cancer.Tumor.Stage.Code, sort = TRUE) %>% filter(
+ American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T4" | American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "M1")
+pancancer_S4$stage = rep("S4", nrow(pancancer_S4))
+
+#merge sub-stages dataframes
+S_panall = rbind(pancancer_S1, pancancer_S2, pancancer_S3, pancancer_S4)
+
+#collapse the substage values per major stages
+pancancer_Ss = aggregate(S_panall$n,
+by = list(S_panall$stage),
+FUN = function(x){sum(x,na.rm=T)})
+setnames(pancancer_Ss, "Group.1", "Dis_progress")
+setnames(pancancer_Ss, "x", "n")
+pancancer_Ss$TCGA_study = rep("Pancancer", nrow(pancancer_Ss))
+pancancer_Ss$Classification = rep("Stages", nrow(pancancer_Ss))
+#----------------------------------------------------------------------
+
+#Merge all the counts for the studies
+pan_fir_data = rbind(firehose_Gs, firehose_Ss, pancancer_Gs, pancancer_Ss)
+
+p = ggplot(pan_fir_data, aes(x= Dis_progress, y= n, fill=TCGA_study)) +
+  geom_bar(position = "dodge", stat = "identity", colour="black", size=0.04) +
+  geom_text(aes(label = n),position = position_dodge(width = 0.7), vjust = 1, color = "black", size = 2.5) +
+  scale_y_continuous(name="Number of patients") +
+  facet_grid(.~Classification, scales = "free_x") +
+  xlab("") +
+  theme_bw()
+
+pdf(file = "Figure S1B - Cbioportal_CC_patient_counts.pdf",width=6.45, height=4.5,useDingbats = FALSE)
+print(p)
+dev.off()
+
+```
+
+```{r END}
+
+```

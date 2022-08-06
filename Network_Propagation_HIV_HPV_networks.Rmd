@@ -1,0 +1,1366 @@
+---
+title: "Network propagation & analysis of HPV preys, Inflammatory factors and HIV"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+#LOAD REQUIRED PACKAGES
+
+```{r Initialize Functions}
+# Load Libraries
+library(igraph)
+library(SparseM)
+library(Matrix)
+library(plyr)
+library(dynamicTreeCut)
+library(tidyr)
+library(clusterProfiler)
+library(dplyr)
+library(data.table)
+library(scales)
+library(stringr)
+library(ggplot2)
+library(ggsignif)
+library(ggpubr)
+library(ggraph)
+library(ggrepel)
+library(scatterpie)
+library(VennDiagram)
+library(janitor)
+library(forcats)
+library(stringi)
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+library(network)
+
+# minimum cluster numbers desired
+minclustersize = 7
+
+```
+
+#Load datasets Used in Many Chucks
+
+```{r Load datasets}
+#Viral protein-human interactions from AP-MS. Courtesy of Prof. Krogan Lab
+Krogan_PPI = read.table("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Krogan_HIV_HPV_AP-MS_interactome.txt", header = T, sep = '\t')
+ 
+# #Load secreted proteins from HPA
+HPA_1 = read.table('~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Protein_predicted_secreted_HPA.txt',header=T,sep='\t') #downloaded from HPA website
+HPA_2 = read.table('~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Protein_predicted_secretedmembrane_HPA.txt',header=T,sep='\t') #downloaded from HPA website
+HPA_merged = rbind(HPA_1, HPA_2) # merged into one dataframe
+
+#Load inflammatory factors secreted by patients on ART
+HIV_inflamm_molec = fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Inflammatory_molecules_DEP_ARTvsHC.txt", header = T) #SIFs extracted from literature
+
+```
+
+#Source Packages Used in Many Chunks
+
+```{r Source functions}
+#For network propagation
+source("~/GitHub/Network_Modeling_HIV-HPV/Source_functions/calc_laplacian.R")
+source("~/GitHub/Network_Modeling_HIV-HPV/Source_functions/run_propagate_diffusion.R")
+source("~/GitHub/Network_Modeling_HIV-HPV/Source_functions/run_propagate_perm_diffusion.R")
+source("~/GitHub/Network_Modeling_HIV-HPV/Source_functions/calc_pvalues.R")
+
+#For enrichment analysis
+source('~/GitHub/Network_Modeling_HIV-HPV/Source_functions/do_enrichmap.R') #-- this is a customed method developed by Prof. Krogan Lab
+
+```
+
+#Perform Initial Gene Enrichment Analysis for HPV preys, SIFs, HPV preys and HIV-HPV overlapping preys
+
+```{r Overall enrichment for Inflamm factors, HIV, HPV preys}
+#Extract human proteins that interact with viral proteins
+HIV_gene_list1 <- unique(Krogan_PPI$PreyGeneName[Krogan_PPI$pathogen=='HIV'])
+HPV_gene_list1 <- unique(Krogan_PPI$PreyGeneName[Krogan_PPI$pathogen=='HPV'])
+HIV_HPV_overlapping_interactors = intersect(HIV_gene_list1, HPV_gene_list1)
+
+#select host proteins that interact ONLY with the HIV or HPV proteins
+HIV_interactors = as.data.frame(c(setdiff(HIV_gene_list1, HIV_HPV_overlapping_interactors),setdiff(HIV_HPV_overlapping_interactors, HIV_gene_list1)))
+colnames(HIV_interactors) = c("gene") #rename column
+
+HPV_interactors = as.data.frame(c(setdiff(HPV_gene_list1, HIV_HPV_overlapping_interactors),setdiff(HIV_HPV_overlapping_interactors, HPV_gene_list1)))
+colnames(HPV_interactors) = c("gene") #rename column
+
+HIV_HPV_overlapping_interactors = as.data.frame(HIV_HPV_overlapping_interactors)
+colnames(HIV_HPV_overlapping_interactors) = c("gene") #rename column
+
+#Select SIFs
+inflamm_prots_secreted = intersect(HIV_inflamm_molec$Genes,HPA_merged$Gene)
+inflam_secreted = as.data.frame(inflamm_prots_secreted)
+colnames(inflam_secreted) = c("gene")
+
+#Prepare dataframe with preys and virus categories
+HIV_interactors$Groups = rep("HIV preys", nrow(HIV_interactors))
+HPV_interactors$Groups = rep("HPV preys", nrow(HPV_interactors))
+HIV_HPV_overlapping_interactors$Groups = rep("HIV-HPV overlapping preys", nrow(HIV_HPV_overlapping_interactors))
+inflam_secreted$Groups = rep("SIFs", nrow(inflam_secreted))
+
+#Enrichment for the viral preys
+preys_for_enrichment = rbind(HIV_interactors, HPV_interactors, HIV_HPV_overlapping_interactors, inflam_secreted)
+
+#Perform enrichment
+M=data.frame(genes=preys_for_enrichment$gene,group=preys_for_enrichment$Groups)
+cutHeight=0.8
+topN=4
+
+colnames(M)=c("genes","group")
+
+pdf(file = "Figure_1E_All_inflamm_HIV_HPV_PPI_heatmap.pdf",width=8.43,height=6.23, useDingbats = FALSE)
+enrich_table = do_enrichmap(M,cutHeight,topN,database="Pathways",flag_cluster_col=TRUE,flag_p=FALSE,path_to_databasefiles='~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/')
+dev.off()
+
+#save out enrichment table
+fwrite(enrich_table, "Table_S1_inflamm_HIV_HPV_overlapping_preys.xls",sep='\t')
+#----------------------------------------------------------------------------------------
+
+#plot a venndiagram for all the preys
+library(ggvenn)
+
+venn <- list(`SIF` = c(inflamm_prots_secreted),
+             `HPV` = c(HPV_gene_list1),
+             `HIV` = c(HIV_gene_list1))
+ 
+ggvenn(venn, c("SIF", "HPV", "HIV")) #use the values from this venndiagram for venn.plot below
+
+#Use the values obtained from the preceding chunk for HIV, HPV and HIV-HPV overlapping preys for final venn diagrams
+venn.plot <- draw.triple.venn(
+area1 = 391,
+area2 = 26,
+area3 = 276,
+n12 = 0,
+n23 = 0,
+n13 = 35,
+n123 = 0,
+category = c("HPV only PPIs", "SIFs", "HIV only PPIs"),
+fill = c("#0073C2FF","forestgreen", "#CD534CFF"),
+lty = "blank",
+cex = 2,
+cat.cex = 2,
+cat.pos = c(285, 180, 105),
+cat.dist = 0.09,
+cat.just = list(c(0.5, 1), c(0.5, 1), c(0.5, 0)),
+ext.pos = 30,
+ext.dist = -0.05,
+ext.length = 0.85,
+ext.line.lwd = 2
+);
+grid.draw(venn.plot);
+grid.newpage();
+
+```
+
+#PERFORM NETWORK PROPAGATION
+
+```{r Prepare base network to use for network propagation}
+# Network name
+name = "network_PC_CORUM_Reactome_IntAct"
+ 
+# # Load network from PC
+KD_pathwaycommons = fread('~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/PathwayCommons_Clean.txt') #Download frpm PathwayCommons
+ 
+G_pathwaycommons = KD_pathwaycommons[grepl("CORUM",KD_pathwaycommons$Interaction_Data_Source)
+                                     | grepl("Reactome",KD_pathwaycommons$Interaction_Data_Source)
+                                     | grepl("IntAct",KD_pathwaycommons$Interaction_Data_Source),
+                                    c("From","To")]
+
+#or directly load the G_pathwaycommons we prepared from above
+G_pathwaycommons = fread('~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Base_network_from_PathwayCommons_clean.txt') #Table S7 in the manuscript
+
+S = G_pathwaycommons
+
+# Make final graph
+S = unique(S)
+S = S[as.logical(!rowSums(S=="")),]
+
+# Make and refine graph (only need to do this once and only if needed for your network)
+G = graph_from_data_frame(S, directed = FALSE, vertices = NULL)
+G = decompose.graph(G, max.comps = 2)
+G = G[[1]]
+nodes_all=row.names(as.matrix(V(G)))
+S_final = unique(as.data.frame(as_edgelist(G)))
+colnames(S_final) = c("From","To")
+length(unique(c(S_final$From,S_final$To)))
+
+# Save out network
+fwrite(S_final,paste0("~/GitHub/Network_Modeling_HIV-HPV/",name,".txt"),sep='\t')
+
+```
+
+#Load network
+```{r Load network from previous chunk and make graph object}
+
+# Network name
+name = "network_PC_CORUM_Reactome_IntAct"
+
+# Load in network
+G_network = fread(paste0("~/GitHub/Network_Modeling_HIV-HPV/",name,".txt"),header=T,sep='\t')
+
+# Select subset
+#G_network = G_network[1:10000,] #comment after trial phase
+G = graph_from_data_frame(G_network, directed = FALSE, vertices = NULL)
+G = decompose.graph(G, max.comps = 2)
+G = G[[1]]
+
+# Continue
+length(unique(c(G_network$From,G_network$To)))
+
+# Make final graph
+nodes_all = row.names(as.matrix(V(G)))
+
+```
+
+# Create Laplacian --- only run once; afterwards the enrire chunk should be commented
+
+```{r Calculate Laplacian}
+start_time <- Sys.time()
+L_all = calc_laplacian(G)
+#L_time_exp = L_all[[2]]
+#L = L_all[[1]]
+finish_time <- Sys.time()
+print(finish_time-start_time)
+
+save(L_all,file=paste0(name,"_invdenom.Rdata"))
+
+```
+
+#Only run once; afterwards the enrire chunk should be commented
+
+```{r Do Network Propagation Multiply gene-wise propagation}
+# Load exp Laplacian
+
+load(paste0(name,"_invdenom.Rdata"))
+L_time_exp = L_all[[2]]
+L = L_all[[1]]
+
+# # --------------------------------------------------------------------------------------------
+#Load Gene List
+#Extract human proteins that interact only with HIV or HPV
+HIV_gene_list1 <- unique(Krogan_PPI$PreyGeneName[Krogan_PPI$pathogen=='HIV'])
+HPV_gene_list1 <- unique(Krogan_PPI$PreyGeneName[Krogan_PPI$pathogen=='HPV'])
+HIV_HPV_overlapping_interactors = intersect(HIV_gene_list1, HPV_gene_list1)
+
+#First gene list
+HIV_gene_list = c(setdiff(HIV_gene_list1, HIV_HPV_overlapping_interactors),setdiff(HIV_HPV_overlapping_interactors, HIV_gene_list1))
+
+#Second gene list
+HPV_gene_list = c(setdiff(HPV_gene_list1, HIV_HPV_overlapping_interactors),setdiff(HIV_HPV_overlapping_interactors, HPV_gene_list1))
+
+#Third gene list
+#Load inflammatory genes in ART patients
+HIV_inflamm_molec = fread("D:/Charles_PhD_Stuff/R_scripts_notebooks/Special_files/Inflammatory_molecules_DEP_ARTvsHC.txt", header = T)
+
+#select secreted inflammatory molecules
+inflamm_prots_secreted = intersect(HIV_inflamm_molec$Genes,HPA_merged$Gene)
+
+# # Make into a dataframe
+D = data.frame(nodes = nodes_all)
+D$HIV_preys = as.logical(match(D$nodes,HIV_gene_list,nomatch=FALSE))
+D$HPV_preys = as.logical(match(D$nodes,HPV_gene_list,nomatch=FALSE))
+D$SIFs = as.logical(match(D$nodes, inflamm_prots_secreted,nomatch = FALSE))
+
+# # --------------------------------------------------------------------------------------------
+#Run Propagation
+
+for (i in 1:(ncol(D)-1)){
+#for (i in 1:1){
+
+  nodes2label = D$nodes[D[,i+1]]
+  nodes2labelvalues = matrix(1,ncol=1,nrow=length(nodes2label)) #Label with 1, everything else will be labeled 0.
+
+  # Run baseline propagation
+  xss_t = run_propagate_diffusion(G,L_time_exp,nodes2label,nodes2labelvalues)
+  xss_t_1 = xss_t[[1]]
+  x0_1 = xss_t[[2]]
+
+  # Run Propagate Permutation
+  xss_perm_mat_1 = run_propagate_perm_diffusion(G,L_time_exp,nodes2label,nodes2labelvalues,num_perms=10000,flag_PermuteInLabeled=FALSE)
+
+  # Calculate p-values
+  Y_1 = calc_pvalues(G, xss_t=xss_t_1, xss_perm_mat=xss_perm_mat_1, x0=x0_1)
+
+  # Create data frame
+  Y_1$dataset = colnames(D)[i+1]
+
+  if (i ==1){
+    Y_final = Y_1
+    Y_perm_final = list()
+    Y_perm_final[[colnames(D)[i+1]]] = xss_perm_mat_1
+  } else {
+    Y_final = rbind(Y_final,Y_1)
+    Y_perm_final[[colnames(D)[i+1]]] = xss_perm_mat_1
+  }
+}
+fwrite(Y_final,"output_propagations_diffusion_individual.txt",sep="\t")
+#save(Y_perm_final, file = "Y_perm_final.Rdata")
+
+# # --------------------------------------------------------------------------------------------
+# Data Integration
+xss_t_combined = aggregate(Y_final$xss_t,
+                           by=list(nodes=Y_final$nodes),
+                           FUN = prod)
+xss_t_combined = xss_t_combined[match(nodes_all,xss_t_combined$nodes),]
+
+xss_perm_mat_combined = Reduce("*", Y_perm_final)
+
+Y_combined = calc_pvalues(G, xss_t=xss_t_combined$x, xss_perm_mat=xss_perm_mat_combined)
+fwrite(Y_combined,"output_propagations_combined.txt",sep="\t")
+
+```
+
+#Induce a subnetwork from either HIV-HPV or HPV-SIF propagation outputs
+
+```{r Extract significant genes and induce a graph}
+# Select significant nodes for two propagations
+Y_final = fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/output_propagations_diffusion_individual.txt")
+Y.wide = reshape2::dcast(Y_final,nodes~dataset,value.var="pvals")
+fwrite(Y_final, "Table 7_Network_propagation_scores.xls", sep = "\t") #save propagation outputs
+
+#SIFs and HPV preys - run this to for SIFs-HPV propagation outputs ---Uncomment lines 229:337 to run HPV and HIV analysis
+Y.wide$sig[rowSums(Y.wide[,c("HPV_preys","Secreted_inflamm")]) < 0.05]="YES" #convergence of HPV preys vs SIFs
+Y.wide$sigsum = rowSums(Y.wide[c("HPV_preys","Secreted_inflamm")]) #calculate rowsum
+Y.wide_clean = subset(Y.wide, sig=="YES")
+sig_genes = Y.wide_clean$nodes
+sig_genes = intersect(sig_genes,as_ids(V(G)))
+
+#HPV and HIV preys ---Uncomment lines 218:223 to run HPV and HIV analysis
+# Y.wide$sig[rowSums(Y.wide[,c("HIV_preys","HPV_preys")]) < 0.05]="YES" #convergence of HPV vs HIV
+# Y.wide$sigsum = rowSums(Y.wide[c("HIV_preys","HPV_preys")]) #calculate rowsum
+# Y.wide_clean = subset(Y.wide, sig=="YES")
+# 
+# prop_df_sorted = arrange(Y.wide_clean, sigsum)
+# selected_sig_genes = as.data.frame(prop_df_sorted[1:500, "nodes"]) #select top 500 most significant genes
+# colnames(selected_sig_genes) = c("nodes")
+# sig_genes = selected_sig_genes$nodes
+# sig_genes = intersect(sig_genes,as_ids(V(G)))
+
+# Make subgraph
+SN = induced_subgraph(G, sig_genes)
+
+# Select only fully connected components of subnetwork
+SN = igraph::simplify(SN)
+components = igraph::clusters(SN, mode="weak")
+biggest_cluster_id = which.max(components$csize)
+vert_ids = V(SN)[components$membership == biggest_cluster_id]
+SN = igraph::induced_subgraph(SN, vert_ids)
+
+```
+
+# Cluster Resulting Significant Propagated Network into Subnetwork Clusters
+
+```{r Clustering based on Network Only}
+# Perform initial clustering
+cc = cluster_walktrap(SN, steps = 10) %>% as.hclust()
+nodes_1 = cc$labels
+
+# plot(cc)
+cc_dist=cophenetic(cc) # calculates the distance until two nodes form into one branch.
+cc_dist = as.matrix(cophenetic(cc))/max(as.matrix(cophenetic(cc))) # normalize based on max height
+cc_dist_mat = as.matrix(cc_dist)
+ct = cutreeDynamic(cc, cutHeight = NULL, minClusterSize = minclustersize, deepSplit = 4, method = 'hybrid', distM = cc_dist_mat)
+cc_in = hclust(as.dist(cc_dist_mat))
+ct_counts = plyr::count(ct)
+node_table = data.frame(nodes=cc_in$labels,clusters=ct)
+
+# Create new subnetwork object of cluster pieces
+n=0
+for (i in unique(ct)){
+  SN_temp = induced_subgraph(SN,which(ct==i))
+  #print(length(V(SN_temp)))
+  if (n == 0){
+    SN_final = SN_temp
+    n=1
+  } else {
+    SN_final = igraph::union(SN_final,SN_temp)
+  }
+
+}
+edges = as_edgelist(SN_final, names = TRUE)
+
+#Plot
+E(SN_final)$weight=1E-15
+co = layout_with_fr(SN_final)
+plot(SN_final, vertex.color = ct, vertex.size=2, vertex.border=F, layout = co)
+pdf(file="network_clusters_layout.pdf",width=20,height=20)
+plot(SN_final,vertex.size=1,vertex.label=NA, vertex.frame.width = 1E-8, vertex.color = node_table$clusters[match(as_ids(V(SN_final)),node_table$nodes)])
+dev.off()
+
+#Save out network edges file with cluster annotation
+fwrite(as.data.frame(edges),file="HPV_Inflamm_edges.txt",sep='\t') # for HPV-Inflamm 
+#fwrite(as.data.frame(edges),file="HPV_HIV_edges.txt",sep='\t') # for HPV-HIV
+
+#Save out nodes file
+x0_table = dcast(Y_final,nodes~dataset,value.var="x0")
+node_table = cbind(node_table,x0_table[match(node_table$nodes,x0_table$nodes),2:ncol(x0_table)])
+#fwrite(node_table,file="HPV_HIV_nodes.txt",sep='\t') # for SIF-HPV 
+fwrite(node_table,file="HPV_inflamm_nodes.txt",sep='\t') # for HPV-HIV
+
+```
+
+# Perform Gene Set Enrichment Analysis Per Subnetwork Cluster
+
+```{r Gene set enrichment anaysis}
+# Run enrichment
+M=fread('~/GitHub/Network_Modeling_HIV-HPV/HPV_Inflamm_nodes.txt')[,c("nodes","clusters")] #Uncomment if runnung HPV-Inflamm propagated outputs
+#M=fread('~/GitHub/Network_Modeling_HIV-HPV/HPV_HIV_nodes.txt')[,c("nodes","clusters")] #Uncomment if runnung HPV-HIV propagated outputs
+M = M[!grepl("_",M$nodes),]
+colnames(M)=c("genes","group")
+
+# Pathways
+pdf(file = "Figure 2B-Inflamm_HPV_overall_enrichment_pathway_heatmap.pdf",width=8.2,height=4.85,useDingbats = FALSE) # for HPV-inflamm
+#pdf(file = "Figure 4B-HIV_HPV_enrichment_pathway_heatmap.pdf",width=14.11,height=5.61,useDingbats = FALSE) # for HPV-HIV
+enrich_table_2 = do_enrichmap(M,cutHeight=0.8,topN=1,database="Pathways",flag_cluster_col=TRUE,flag_p=FALSE,
+                            path_to_databasefiles='~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/') #download from Msigdb
+dev.off()
+fwrite(enrich_table_2,"Table-S2-Inflamm_HPV_enrichment_table_pathways.xls",sep="\t")
+#fwrite(enrich_table_2,"Table-S3 HIV_HPV_enrichment_table_pathways.xls",sep="\t")
+
+```
+
+#Visualize Propagated HPV preys and SIFs Network Subnetwork Clusters
+
+```{r Add information to the nodes and save out clusters ---Uncomment if running SIF/HPV}
+# Initialize nodes and edges tables
+edges = fread("~/GitHub/Network_Modeling_HIV-HPV/HPV_Inflamm_edges.txt") # for Inflamm-HPV
+edges = data.table(from = edges[,1], to = edges[,2], type = "PC")
+nodes_in_edges_all = unique(c(edges$from,edges$to))
+nodes_df_clusters = data.frame(nodes = nodes_in_edges_all, cluster = ct[match(nodes_in_edges_all,cc_in$labels,nomatch=F)])
+
+#select secreted inflammatory factors
+inflamm_prots_secreted = inflam_secreted$gene
+
+#Prepare network edgelist
+n=0
+G_edges = as.data.table(as_edgelist(G))
+for (i in unique(nodes_df_clusters$cluster)){
+  nodes_cluster = as.character(nodes_df_clusters$nodes[nodes_df_clusters$cluster==i])
+
+  # Prepare subnetwork
+  G_cluster = G_edges[as.logical(match(G_edges$V1,nodes_cluster,nomatch=F)) & as.logical(match(G_edges$V2,nodes_cluster,nomatch=F)),]
+  G_cluster$type = "PC"
+  G_cluster$cluster = i
+
+    if (n==0){
+    G_Final_Subnetworks = G_cluster
+    n=1
+    } else {
+    G_Final_Subnetworks = rbind(G_Final_Subnetworks,G_cluster)
+    }
+
+  }
+
+#save out edge list
+fwrite(G_Final_Subnetworks,"Y_final_HIV_HPV_PPI_network_edges.txt",sep='\t') # network edgelist
+
+#make node files
+nodes = data.frame(nodes = unique(c(as.character(G_Final_Subnetworks$V1),as.character(G_Final_Subnetworks$V2))))
+nodes$nodes_raw = gsub("_.*","",nodes$nodes)
+
+# Add clusters to final nodes file
+nodes$cluster = nodes_df_clusters$cluster[match(nodes$nodes_raw,nodes_df_clusters$nodes)]
+nodes$cluster_all = nodes$cluster
+nodes$cluster_all[grepl("_",nodes$nodes)] = as.numeric(gsub(".*_","",nodes$nodes[grepl("_",nodes$nodes)]))
+
+#Flag SIFs
+flag_inflamm_factors = as.logical(match(nodes$nodes_raw,inflamm_prots_secreted,nomatch=F))
+nodes$flag_inflamm_factors[flag_inflamm_factors]="Inflamm_factors"
+
+#add -log pvalues from network propagation
+nodes$propagation_neglog10pvalue = -log10(Y_final$pvals[match(nodes$nodes,Y_final$nodes)])
+nodes$propagation_neglog10pvalue[!is.finite(nodes$propagation_neglog10pvalue)]=0
+
+#Save out the node table
+fwrite(nodes,"Y_final_HIV_HPV_PPI_network_nodes_with_flags.txt",sep='\t') # network nodes
+
+scale = 1.5
+# Load data
+G_Final_Subnetworks = fread("~/GitHub/Network_Modeling_HIV-HPV/Y_final_HIV_HPV_PPI_network_edges.txt")
+
+# Load nodes
+nodes = fread("~/GitHub/Network_Modeling_HIV-HPV/Y_final_HIV_HPV_PPI_network_nodes_with_flags.txt")
+
+# All together
+G_edges = G_Final_Subnetworks
+g = graph_from_data_frame(G_edges)
+layout = create_layout(g, layout = 'fr',circular=FALSE)
+layout$node_clusters = nodes$cluster_all[match(nodes$nodes,layout$name,nomatch=F)]
+node_types = rep("Human protein",nrow(layout))
+layout$node_types = node_types
+Y_final[, 2][Y_final[, 2] == 0] <- 0.00001 #replace the pvals = 0 with smaller values
+layout$propagation_sig = -log10(Y_final$pvals[match(layout$name,Y_final$nodes)])
+layout$propagation_sig[is.na(layout$propagation_sig)]=2
+layout[,9] <- rescale(layout[,9],to=c(0.8,1.3))
+
+# Make text annotation table
+cmp = components(g)
+layout$node_components = cmp$membership
+cmps = unique(layout$node_components)
+xs = rep(NA,length(cmps))
+ys = rep(NA,length(cmps))
+cluster_name = rep(NA,length(cmps))
+for (i in 1:length(cmps)){
+  inds = as.logical(match(layout$node_components,cmps[i],nomatch=F))
+  xs[i] = mean(layout$x[inds])
+  ys[i] = max(layout$y[inds])
+  cluster_name[i]=unique(layout$node_clusters[inds])
+}
+
+#ys = ys
+node_cmp_table = data.frame(components = cmps, xs = xs, ys = ys,
+                            cluster_name = cluster_name, cluster_labels = paste("C",cluster_name,sep=""))
+
+# Define node size
+node_sizes_pies = layout$node_types
+node_sizes_pies[node_sizes_pies=="Human protein"] = 1.5/13
+layout$node_sizes_pies = as.numeric(node_sizes_pies)
+
+# Create pie mat
+data_mat = nodes[,c("flag_inflamm_factors")]
+data_mat[data_mat=="Inflamm_factors"]=TRUE
+data_mat[data_mat==TRUE]=0.25
+data_mat$flag_inflamm_factors = as.numeric(data_mat$flag_inflamm_factors)
+data_mat[is.na(data_mat)]=0
+data_mat_in = cbind(layout,data_mat)
+data_mat_in$node_sizes_pies = layout$propagation_sig * layout$node_sizes_pies
+data_mat_in$flag_other = rep(0,nrow(data_mat_in))
+data_mat_in$flag_other[(data_mat_in[,c("flag_inflamm_factors")])==0]=0.25
+color_mat = c("red", "darkgrey")
+
+#plot the network
+p = ggraph(layout) +
+    geom_edge_link(aes(color=type, width=1)) +
+    scale_edge_width(range = c(0.3, 0.3))+
+    scale_edge_color_manual(values = c("PC"="grey")) +
+    scale_color_manual(values = c("blue", "red", "green","darkgrey")) +
+    scale_shape_manual(values = c(20)) +
+    scale_size_manual(aes(values = propagation_sig*0.5)) +
+    geom_text_repel(aes(x=x,y=y,label=name), point.padding = 0.1,box.padding = 0.15, force_pull=0.1,
+                    max.overlaps = Inf,size=1.5,segment.linetype = 'dotted',segment.size=0.2,color="black") +
+    theme_classic() +
+    theme(axis.line=element_blank(),axis.text.x=element_blank(),axis.text.y=element_blank(),
+          axis.ticks=element_blank(),axis.title.x=element_blank(),axis.title.y=element_blank()) +
+    geom_scatterpie(aes(x=x, y=y, r=node_sizes_pies),data = data_mat_in,
+                    cols = c("flag_inflamm_factors", "flag_other"), colour=NA,pie_scale = 3) +
+    coord_fixed() +
+    scale_fill_manual(values=color_mat)
+
+p = p + annotate("text", x = node_cmp_table$xs, y = node_cmp_table$ys,
+                 label = node_cmp_table$cluster_labels, parse = FALSE, size=3, color='grey50',
+                 fontface = 'bold',alpha=0.3)
+
+#Save out the network as pdf file
+pdf(file = "Figure 3-Inflamm_HPV_PPI_network.pdf",width=8.5*scale, height=11*scale,useDingbats = FALSE) #for inflamm
+print(p)
+dev.off()
+
+```
+
+#Visualize Propagated HPV and HPV Preys subnetwork clusters with Viral Protein Connections
+
+```{r Add AP-MS links and viral baits to the network ---Uncomment if running for HIV/HPV}
+# Initialize nodes and edges tables
+# edges = fread("~/GitHub/Network_Modeling_HIV-HPV/Network_analysis_HIV_HPV/HPV_HIV_edges.txt")
+# edges = data.table(from = edges[,1], to = edges[,2], type = "PC")
+# nodes_in_edges_all = unique(c(edges$from,edges$to))
+# nodes_df_clusters = data.frame(nodes = nodes_in_edges_all, cluster = ct[match(nodes_in_edges_all,cc_in$labels,nomatch=F)])
+# 
+# #Extract human proteins that interact only with viral preys
+# APMS_links_1 = Krogan_PPI %>% filter(
+#  pathogen == "HIV" | pathogen == "HPV"
+# )
+# 
+# #Delete HPV-31_
+# APMS_links_1 = APMS_links_1 %>%
+#   mutate_at("Bait", str_replace, "HPV-31_", "")
+# 
+# #select column of interest
+# APMS_links = APMS_links_1[,c("PreyGeneName", "Bait")]
+# colnames(APMS_links) = c("From", "To")
+# 
+# #convert into a graph object
+# s = rbind(S, APMS_links)
+# # Make final graph
+# s = unique(s)
+# s = s[as.logical(!rowSums(s=="")),]
+# 
+# # Make and refine graph (only need to do this once and only if needed for your network)
+# G1 = graph_from_data_frame(s, directed = FALSE, vertices = NULL)
+# G1 = decompose.graph(G1, max.comps = 2)
+# G1 = G1[[1]]
+# 
+# #Load the viral baits columns
+# viralbaits_added = as.data.frame(APMS_links_1$Bait)
+# colnames(viralbaits_added) = c("viralbaits")
+# viralbaits_added = subset(viralbaits_added, !duplicated(viralbaits_added[,1])) # delete any duplicates
+# 
+# #add top hits connections to the nodes table
+# n=0
+# G_edges = as.data.table(as_edgelist(G1))
+# for (i in unique(nodes_df_clusters$cluster)){
+#   nodes_cluster = as.character(nodes_df_clusters$nodes[nodes_df_clusters$cluster==i])
+#   
+#   # Prepare subnetwork
+#   G_cluster = G_edges[as.logical(match(G_edges$V1,nodes_cluster,nomatch=F)) & as.logical(match(G_edges$V2,nodes_cluster,nomatch=F)),]
+#   G_cluster$type = "PC"
+#   G_cluster$cluster = i
+#   
+#   # Add overall_tophits_addeds
+#   G_cluster_viralbaits_added = G_edges[
+#     (as.logical(match(G_edges$V1,viralbaits_added$viralbaits,nomatch=F)) & as.logical(match(G_edges$V2,nodes_cluster,nomatch=F))) | (as.logical(match(G_edges$V1,nodes_cluster,nomatch=F)) & as.logical(match(G_edges$V2,viralbaits_added$viralbaits,nomatch=F)))
+#     ,]
+#   G_cluster_viralbaits_added$V1[as.logical(match(G_cluster_viralbaits_added$V1,viralbaits_added$viralbaits,nomatch=F))] = paste(G_cluster_viralbaits_added$V1[as.logical(match(G_cluster_viralbaits_added$V1,viralbaits_added$viralbaits,nomatch=F))],i,sep="_") 
+#   G_cluster_viralbaits_added$V2[as.logical(match(G_cluster_viralbaits_added$V2,viralbaits_added$viralbaits,nomatch=F))] = paste(G_cluster_viralbaits_added$V2[as.logical(match(G_cluster_viralbaits_added$V2,viralbaits_added$viralbaits,nomatch=F))],i,sep="_") 
+# 
+#   if (nrow(G_cluster_viralbaits_added)>0){
+#   G_cluster_viralbaits_added$type = "APMS_added"
+#   G_cluster_viralbaits_added$cluster = i
+#   
+#   if (n==0){
+#     G_Final_Subnetworks = rbind(G_cluster,G_cluster_viralbaits_added)
+#     n=1
+#   } else {
+#     G_Final_Subnetworks = rbind(G_Final_Subnetworks,G_cluster,G_cluster_viralbaits_added)
+#   }
+#   
+#   } else {
+#     
+#     if (n==0){
+#     G_Final_Subnetworks = G_cluster
+#     n=1
+#     } else {
+#     G_Final_Subnetworks = rbind(G_Final_Subnetworks,G_cluster)
+#     }
+#     
+#   }
+# }
+# 
+# # Remove any overall_tophits_addeds that are in network to begin with because they are now replaced by the other overall_tophits_addeds.
+# G_Final_Subnetworks = G_Final_Subnetworks[!as.logical(match(G_Final_Subnetworks$V1,viralbaits_added$viralbaits,nomatch=F)) & !as.logical(match(G_Final_Subnetworks$V2,viralbaits_added$viralbaits,nomatch=F)), ]
+# 
+# print(length(unique(c(G_Final_Subnetworks$V1,G_Final_Subnetworks$V2))))
+# print(length(unique(nodes_df_clusters$nodes)))
+# 
+# #save out edge list
+# fwrite(G_Final_Subnetworks,"Y_final_HIV_HPV_PPI_network_edges_with_added_viral_baits.txt",sep='\t') # network edgelist
+# 
+# #make node files
+# nodes = data.frame(nodes = unique(c(as.character(G_Final_Subnetworks$V1),as.character(G_Final_Subnetworks$V2))))
+# nodes$nodes_raw = gsub("_.*","",nodes$nodes)
+# nodes$flag_viralbaits_added = as.logical(match(nodes$nodes_raw,viralbaits_added$viralbaits,nomatch=F))
+# 
+# # Add clusters to final nodes file
+# nodes$cluster = nodes_df_clusters$cluster[match(nodes$nodes_raw,nodes_df_clusters$nodes)]
+# nodes$cluster_all = nodes$cluster
+# nodes$cluster_all[grepl("_",nodes$nodes)] = as.numeric(gsub(".*_","",nodes$nodes[grepl("_",nodes$nodes)]))
+# 
+# #Add flags to the nodes
+# #select host proteins that interact with the viral proteins
+# HIV_interactors = HIV_interactors$gene
+# HPV_interactors = HPV_interactors$gene
+# 
+# #flag HIV
+# nodes$flag_HIV_prey = as.logical(match(nodes$nodes_raw,HIV_interactors,nomatch=F))
+# # 
+# # #Flag HPV
+# nodes$flag_HPV_prey = as.logical(match(nodes$nodes_raw,HPV_interactors,nomatch=F))
+# 
+# fwrite(nodes,"Y_final_HIV_HPV_PPI_network_nodes_and_added_viral_baits.txt",sep='\t') # network nodes
+# #----------------------------------------------------------------------------------------------------
+# scale = 1.5
+# # Load data
+# G_Final_Subnetworks_1 = fread("~/GitHub/Network_Modeling_HIV-HPV/Network_analysis_HIV_HPV/Y_final_HIV_HPV_PPI_network_edges_with_added_viral_baits.txt")
+# 
+# # Load nodes
+# nodes = fread("~/GitHub/Network_Modeling_HIV-HPV/Network_analysis_HIV_HPV/Y_final_HIV_HPV_PPI_network_nodes_and_added_viral_baits.txt")
+# 
+# # All together
+# G_edges = G_Final_Subnetworks_1
+# g = graph_from_data_frame(G_edges)
+# layout = create_layout(g, layout = 'fr',circular=FALSE)
+# layout$node_clusters = nodes$cluster_all[match(nodes$nodes,layout$name,nomatch=F)]
+# node_types = rep("Human protein",nrow(layout))
+# node_types[as.logical(match(gsub("_.*","",layout$name),viralbaits_added$viralbaits,nomatch=F))] = "viralbaits_added"
+# layout$node_types = node_types
+# Y_final[, 2][Y_final[, 2] == 0] <- 0.00001 #replace the pvals = 0 with smaller values
+# layout$propagation_sig = -log10(Y_final$pvals[match(layout$name,Y_final$nodes)])
+# layout$propagation_sig[is.na(layout$propagation_sig)]=2
+# layout[,9] <- rescale(layout[,9],to=c(0.8,1.7))
+# 
+# # Make text annotation table
+# cmp = components(g)
+# layout$node_components = cmp$membership
+# cmps = unique(layout$node_components)
+# xs = rep(NA,length(cmps))
+# ys = rep(NA,length(cmps))
+# cluster_name = rep(NA,length(cmps))
+# for (i in 1:length(cmps)){
+#   inds = as.logical(match(layout$node_components,cmps[i],nomatch=F))
+#   xs[i] = mean(layout$x[inds])
+#   ys[i] = max(layout$y[inds])
+#   cluster_name[i]=unique(layout$node_clusters[inds])
+# }
+# 
+# #ys = ys
+# node_cmp_table = data.frame(components = cmps, xs = xs, ys = ys, 
+#                             cluster_name = cluster_name, cluster_labels = paste("C",cluster_name,sep=""))
+# 
+# #--------------------------------------------------------------------------------------------------------------------
+# # Define node size
+# node_sizes_pies = layout$node_types
+# node_sizes_pies[node_sizes_pies=="Human protein"] = 1.5/13
+# node_sizes_pies[node_sizes_pies=="viralbaits_added"] = 2/13
+# layout$node_sizes_pies = as.numeric(node_sizes_pies)
+# layout[is.na(layout)] = 0.2 #replace NA in the node_size_pies
+# 
+# # Create pie mat
+# data_mat = nodes[,c("flag_HIV_prey","flag_HPV_prey")]
+# data_mat$flag_HIV_prey = as.numeric(data_mat$flag_HIV_prey)
+# data_mat$flag_HPV_prey = as.numeric(data_mat$flag_HPV_prey)
+# data_mat[is.na(data_mat)]=0
+# data_mat_in = cbind(layout,data_mat)
+# data_mat_in$node_sizes_pies = layout$propagation_sig * layout$node_sizes_pies
+# data_mat_in$flag_other = rep(0,nrow(data_mat_in))
+# data_mat_in$flag_other[rowSums(data_mat_in[,c("flag_HIV_prey","flag_HPV_prey")])==0]=0.25
+# color_mat = c("red", "green", "darkgrey")
+# 
+# #size_mod = 0.5
+# p = ggraph(layout) + 
+#     geom_edge_link(aes(color=type, width=1)) +
+#     scale_edge_width(range = c(0.3, 0.3))+
+#     scale_edge_color_manual(values = c("PC"="grey", "APMS_added"="red")) +
+#     scale_color_manual(values = c("red", "darkgrey","red")) +
+#     scale_shape_manual(values = c(18, 20, 18)) +
+# 
+#     geom_text_repel(aes(x=x,y=y,label=name), point.padding = 0.1, box.padding = 0.15,
+#                     max.overlaps = Inf,size=1.5,segment.linetype = 'dotted',segment.size=0.2,color="black") +
+#     theme_classic() +  
+#     theme(axis.line=element_blank(),axis.text.x=element_blank(),axis.text.y=element_blank(),
+#           axis.ticks=element_blank(),axis.title.x=element_blank(),axis.title.y=element_blank()) +
+#     geom_scatterpie(aes(x=x, y=y, r=node_sizes_pies),data = data_mat_in,
+#                     cols = c("flag_HIV_prey","flag_HPV_prey", "flag_other"),colour="NA",pie_scale = 0) +
+#     coord_fixed() +
+#     scale_fill_manual(values=color_mat)
+# 
+# p = p + annotate("text", x = node_cmp_table$xs, y = node_cmp_table$ys, 
+#                  label = node_cmp_table$cluster_labels, parse = FALSE, size=3, color='grey50',
+#                  fontface = 'bold',alpha=0.3)
+# 
+# #save out network
+# pdf(file = "Figure 5-HPV_HIV_network_withbaits.pdf",width=8.5*scale, height=11*scale,useDingbats = FALSE)
+# print(p)
+# dev.off()
+
+```
+
+#Overlaying Top mutated SIFs or HIV preys from CC genomics data from cBioPortal onto the Propagated subnetwork clusters
+
+```{r Prepare network edgelist with top hits from cBioPortal for Cancer Genomics}
+# Initialize nodes and edges tables
+edges = fread("~/GitHub/Network_Modeling_HIV-HPV/HPV_Inflamm_edges.txt") #Uncomment for inflamm
+#edges = fread("~/GitHub/Network_Modeling_HIV-HPV/HPV_HIV_edges.txt") #Uncomment for HIV
+edges = data.table(from = edges[,1], to = edges[,2], type = "PC")
+nodes_in_edges_all = unique(c(edges$from,edges$to))
+nodes_df_clusters = data.frame(nodes = nodes_in_edges_all, cluster = ct[match(nodes_in_edges_all,cc_in$labels,nomatch=F)])
+
+#Load top HIV hits from cBioPortal for Cancer Genomics - only run one dataset at a time
+Top_cbio_hits = fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/Inflamm_CC_final_hits.txt", header = T) #for SIF hits
+#Top_cbio_hits = fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/HIV_CC_final_hits.txt", header = T) #for HIV hits
+
+#Extract and rename columns for grade and stage hits
+grade_hits = as.data.frame(Top_cbio_hits$grade_hits)
+colnames(grade_hits) = c("gene")
+
+stage_hits = as.data.frame(Top_cbio_hits$stage_hits)
+colnames(stage_hits) = c("gene")
+
+#Collapse top hits into a single column add hit connections to the network clusters
+overall_tophits_added_1 = rbind(grade_hits, stage_hits)
+colnames(overall_tophits_added_1) = c("overall_tophits_added")
+overall_tophits_added = subset(overall_tophits_added_1, !duplicated(overall_tophits_added_1[,1])) # delete any duplicates
+
+#add top hits connections to the nodes table
+n=0
+G_edges = as.data.table(as_edgelist(G))
+for (i in unique(nodes_df_clusters$cluster)){
+  nodes_cluster = as.character(nodes_df_clusters$nodes[nodes_df_clusters$cluster==i])
+  
+  # Prepare subnetwork
+  G_cluster = G_edges[as.logical(match(G_edges$V1,nodes_cluster,nomatch=F)) & as.logical(match(G_edges$V2,nodes_cluster,nomatch=F)),]
+  G_cluster$type = "PC"
+  G_cluster$cluster = i
+  
+  # Add overall_tophits_addeds
+  G_cluster_overall_tophits_added = G_edges[
+    (as.logical(match(G_edges$V1,overall_tophits_added$overall_tophits_added,nomatch=F)) & as.logical(match(G_edges$V2,nodes_cluster,nomatch=F))) | (as.logical(match(G_edges$V1,nodes_cluster,nomatch=F)) & as.logical(match(G_edges$V2,overall_tophits_added$overall_tophits_added,nomatch=F)))
+    ,]
+  G_cluster_overall_tophits_added$V1[as.logical(match(G_cluster_overall_tophits_added$V1,overall_tophits_added$overall_tophits_added,nomatch=F))] = paste(G_cluster_overall_tophits_added$V1[as.logical(match(G_cluster_overall_tophits_added$V1,overall_tophits_added$overall_tophits_added,nomatch=F))],i,sep="_") 
+  G_cluster_overall_tophits_added$V2[as.logical(match(G_cluster_overall_tophits_added$V2,overall_tophits_added$overall_tophits_added,nomatch=F))] = paste(G_cluster_overall_tophits_added$V2[as.logical(match(G_cluster_overall_tophits_added$V2,overall_tophits_added$overall_tophits_added,nomatch=F))],i,sep="_") 
+
+  if (nrow(G_cluster_overall_tophits_added)>0){
+  G_cluster_overall_tophits_added$type = "PC_overall_tophits_added"
+  G_cluster_overall_tophits_added$cluster = i
+  
+  if (n==0){
+    G_Final_Subnetworks = rbind(G_cluster,G_cluster_overall_tophits_added)
+    n=1
+  } else {
+    G_Final_Subnetworks = rbind(G_Final_Subnetworks,G_cluster,G_cluster_overall_tophits_added)
+  }
+  
+  } else {
+    
+    if (n==0){
+    G_Final_Subnetworks = G_cluster
+    n=1
+    } else {
+    G_Final_Subnetworks = rbind(G_Final_Subnetworks,G_cluster)
+    }
+    
+  }
+}
+
+# Remove any overall_tophits_addeds that are in network to begin with because they are now replaced by the other overall_tophits_addeds.
+G_Final_Subnetworks = G_Final_Subnetworks[!as.logical(match(G_Final_Subnetworks$V1,overall_tophits_added$overall_tophits_added,nomatch=F)) & !as.logical(match(G_Final_Subnetworks$V2,overall_tophits_added$overall_tophits_added,nomatch=F)), ]
+
+print(length(unique(c(G_Final_Subnetworks$V1,G_Final_Subnetworks$V2))))
+print(length(unique(nodes_df_clusters$nodes)))
+
+#save out edge list
+fwrite(G_Final_Subnetworks,"Y_final_HIV_HPV_PPI_network_edges_with_added_CC_hits.txt",sep='\t') # network edgelist
+
+#make node files
+nodes = data.frame(nodes = unique(c(as.character(G_Final_Subnetworks$V1),as.character(G_Final_Subnetworks$V2))))
+nodes$nodes_raw = gsub("_.*","",nodes$nodes)
+nodes$flag_overall_tophits_added = as.logical(match(nodes$nodes_raw,overall_tophits_added$overall_tophits_added,nomatch=F))
+
+# Add clusters to final nodes file
+nodes$cluster = nodes_df_clusters$cluster[match(nodes$nodes_raw,nodes_df_clusters$nodes)]
+nodes$cluster_all = nodes$cluster
+nodes$cluster_all[grepl("_",nodes$nodes)] = as.numeric(gsub(".*_","",nodes$nodes[grepl("_",nodes$nodes)]))
+
+#Add flags to the nodes
+#flag HIV
+nodes$flag_HIV_prey = as.logical(match(nodes$nodes_raw,HIV_interactors,nomatch=F))
+
+#Flag HPV
+nodes$flag_HPV_prey = as.logical(match(nodes$nodes_raw,HPV_interactors,nomatch=F))
+
+#Flag inflamm. markers
+nodes$flag_inflamm_factors = as.logical(match(nodes$nodes_raw,inflamm_prots_secreted,nomatch=F))
+
+# #Flag grade hits
+top_grade_hits = as.logical(match(nodes$nodes_raw,grade_hits,nomatch=F))
+nodes$flag_early_hits[top_grade_hits]="Early_hits"
+ 
+# #Flag stage hits
+top_stage_hits = as.logical(match(nodes$nodes_raw,stage_hits,nomatch=F))
+nodes$flag_late_hits[top_stage_hits]="Late_hits"
+
+fwrite(nodes,"Y_final_HIV_HPV_PPI_network_nodes_and_added_CC_hits.txt",sep='\t') # network nodes
+#---------------------------------------------
+
+# Load data
+G_Final_Subnetworks = fread("~/GitHub/Network_Modeling_HIV-HPV/Y_final_HIV_HPV_PPI_network_edges_with_added_CC_hits.txt")
+
+# Load nodes
+nodes = fread("~/GitHub/Network_Modeling_HIV-HPV/Y_final_HIV_HPV_PPI_network_nodes_and_added_CC_hits.txt")
+
+# All together
+G_edges = G_Final_Subnetworks
+g = graph_from_data_frame(G_edges)
+layout = create_layout(g, layout = 'fr',circular=FALSE)
+layout$node_clusters = nodes$cluster_all[match(nodes$nodes,layout$name,nomatch=F)]
+node_types = rep("Human protein",nrow(layout))
+node_types[as.logical(match(gsub("_.*","",layout$name),overall_tophits_added$overall_tophits_added,nomatch=F))] = "overall_tophits_added"
+layout$node_types = node_types
+Y_final[, 2][Y_final[, 2] == 0] <- 0.00001 #replace the pvals = 0 with smaller values
+layout$propagation_sig = -log10(Y_final$pvals[match(layout$name,Y_final$nodes)])
+layout$propagation_sig[is.na(layout$propagation_sig)]=2
+layout[,9] <- rescale(layout[,9],to=c(0.8,1.7))
+
+# Make text annotation table
+cmp = components(g)
+layout$node_components = cmp$membership
+cmps = unique(layout$node_components)
+xs = rep(NA,length(cmps))
+ys = rep(NA,length(cmps))
+cluster_name = rep(NA,length(cmps))
+for (i in 1:length(cmps)){
+  inds = as.logical(match(layout$node_components,cmps[i],nomatch=F))
+  xs[i] = mean(layout$x[inds])
+  ys[i] = max(layout$y[inds])
+  cluster_name[i]=unique(layout$node_clusters[inds])
+}
+
+#ys = ys
+node_cmp_table = data.frame(components = cmps, xs = xs, ys = ys, 
+                            cluster_name = cluster_name, cluster_labels = paste("C",cluster_name,sep=""))
+
+#--------------------------------------------------------------------------------------------------------------------
+# Define node size
+node_sizes_pies = layout$node_types
+node_sizes_pies[node_sizes_pies=="Human protein"] = 1.5/13
+node_sizes_pies[node_sizes_pies=="overall_tophits_added"] = 2/13
+layout$node_sizes_pies = as.numeric(node_sizes_pies)
+
+# Create pie mat
+data_mat = nodes[,c("flag_HIV_prey","flag_HPV_prey")]
+data_mat[data_mat=="Early_hits"]=TRUE
+data_mat[data_mat=="Late_hits"]=TRUE
+data_mat[data_mat==TRUE]=0.25
+data_mat$flag_HIV_prey = as.numeric(data_mat$flag_HIV_prey)
+data_mat$flag_HPV_prey = as.numeric(data_mat$flag_HPV_prey)
+data_mat$flag_inflamm_factors = as.numeric(data_mat$flag_inflamm_factors)
+data_mat$flag_early_hits = as.numeric(data_mat$flag_early_hits)
+data_mat$flag_late_hits = as.numeric(data_mat$flag_late_hits)
+data_mat[is.na(data_mat)]=0
+data_mat_in = cbind(layout,data_mat)
+data_mat_in$node_sizes_pies = layout$propagation_sig * layout$node_sizes_pies
+data_mat_in$flag_other = rep(0,nrow(data_mat_in))
+data_mat_in$flag_other[rowSums(data_mat_in[,c("flag_HIV_prey","flag_HPV_prey", "flag_inflamm_factors", "flag_early_hits", "flag_late_hits")])==0]=0.25
+
+color_mat = c("red","purple", "darkgrey")
+
+#size_mod = 0.5
+p = ggraph(layout) + 
+    geom_edge_link(aes(color=type, width=1)) +
+    scale_edge_width(range = c(0.3, 0.3))+
+    scale_edge_color_manual(values = c("PC"="grey", "PC_overall_tophits_added"="blue")) +
+    scale_color_manual(values = c("red", "darkgrey","red")) +
+    scale_shape_manual(values = c(18, 20, 18)) +
+
+    geom_text_repel(aes(x=x,y=y,label=name), point.padding = 0.1, box.padding = 0.15,
+                    max.overlaps = Inf,size=1.5,segment.linetype = 'dotted',segment.size=0.2,color="black") +
+    theme_classic() +  
+    theme(axis.line=element_blank(),axis.text.x=element_blank(),axis.text.y=element_blank(),
+          axis.ticks=element_blank(),axis.title.x=element_blank(),axis.title.y=element_blank()) +
+    geom_scatterpie(aes(x=x, y=y, r=node_sizes_pies),data = data_mat_in,
+                    cols = c("flag_HIV_prey","flag_HPV_prey", "flag_inflamm_factors", "flag_early_hits", "flag_late_hits", "flag_other"),colour="NA",pie_scale = 4) +
+    coord_fixed() +
+    scale_fill_manual(values=color_mat)
+
+p = p + annotate("text", x = node_cmp_table$xs, y = node_cmp_table$ys, 
+                 label = node_cmp_table$cluster_labels, parse = FALSE, size=3, color='grey50',
+                 fontface = 'bold',alpha=0.3)
+
+#save out network
+pdf(file = "Figure S3A Inflamm_HPV_PPI_network_with_tophits.pdf",width=8.5*scale, height=11*scale,useDingbats = FALSE) #for inflamm
+#pdf(file = "Figure S3B HIV_HPV_PPI_network_with_tophits.pdf",width=8.5*scale, height=11*scale,useDingbats = FALSE) #for HIV
+print(p)
+dev.off()
+
+```
+
+#Perform Enrichment Analysis for subnetwork clusters with Connections to the Top Mutated SIFs or HIV preys
+
+```{r Do enrichments per CC_tophit}
+# Load data
+nodes = fread("~/GitHub/Network_Modeling_HIV-HPV/Y_final_HIV_HPV_PPI_network_nodes_and_added_CC_hits.txt", sep = '\t')
+
+#prepare dataframe for enrichment analysis
+for (i in 1:nrow(overall_tophits_added)){
+  overall_tophits_added_curr = overall_tophits_added$overall_tophits_added[i]
+  cluster_curr = unique(nodes$cluster_all[as.logical(match(nodes$nodes_raw, overall_tophits_added_curr,nomatch=F))])
+  genes_curr = nodes$nodes[as.logical(match(nodes$cluster_all,cluster_curr,nomatch=F)) & !nodes$flag_overall_tophits_added]
+  if (length(genes_curr)>0){
+  if (i==1){
+    DF = data.frame(genes=genes_curr, group=overall_tophits_added_curr)
+  } else {
+    DF = rbind(DF,data.frame(genes=genes_curr, group=overall_tophits_added_curr))
+  }
+  }
+}
+# Run enrichment
+M=DF
+colnames(M)=c("genes","group")
+#pdf(file = "Figure 6C_Inflamm_HPV_PPI_Pathways_withhits.pdf", width = 5.76, height = 4.41, useDingbats = FALSE) #for Inflamm)
+pdf(file = "Figure 7C_HIV_HPV_PPI_Pathways_withhits.pdf", width = 6.34, height = 3.91, useDingbats = FALSE) #for HIV
+enrich_table = do_enrichmap(M,cutHeight=0.8,topN=2,database="Pathways",flag_cluster_col=TRUE,flag_p=FALSE,path_to_databasefiles='~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/')
+dev.off()
+
+#fwrite(enrich_table, "Table S4-Inflamm_overlaid_on_Inflamm_HPV_network.xls",sep='\t') #for Inflamm
+fwrite(enrich_table, "Table S5-HIV_overlaid_on_HIV_HPV_network.xls",sep='\t') #for HIV
+
+```
+
+#Selection of Propagated HPV Prey/SIF/HPV Prey Subnetwork Clusters Relevant to Cervical Cancer
+
+```{r Compare alteration frequencies of network clusters among CC patients}
+#Load node tables for HPV/SIFs propagation --- Uncomment to run for HPV/SIFs
+HPV_inflamm_subnetworks1 = fread("~/GitHub/Network_Modeling_HIV-HPV/HPV_inflamm_nodes.txt", header = T)
+HPV_inflamm_subnetworks = HPV_inflamm_subnetworks1 %>% dplyr::select(nodes, clusters)
+setnames(HPV_inflamm_subnetworks, "nodes", "gene_symbol")
+
+#NB: EXTRACT THE ALTERATION FREQUENCIES (Mutation, CNA, mRNA and protein expression alterations) OF ALL NODES FOR CERVICAL CANCERS STUDIES (Pancancer & Firehose Legacy)
+
+#PANCANCER and FIREHOSE MERGED
+CC_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CC_all_inflamm_clusters_pancancer.tsv"))
+CC_TCGA1$freq1 = CC_TCGA1$num_samples_altered / 297 * 100
+
+CC_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CC_all_inflamm_clusters_firehouse.tsv"))
+CC_TCGA2$freq2 = CC_TCGA2$num_samples_altered / 310 * 100
+
+CC_combined = CC_TCGA1 %>%
+     left_join(CC_TCGA2, by='gene_symbol')
+CC_combined$Alteration_frequency_in_TCGA = (CC_combined$freq1 + CC_combined$freq2) / 2
+
+#Extract genetic alter frequency for subnetwork nodes
+CC_genet_clusters = CC_combined %>%
+  left_join(HPV_inflamm_subnetworks, by='gene_symbol')
+
+#compare cervical cancer mut frequencies across clusters
+CC_genet_clusters = na.omit(CC_genet_clusters)
+p = ggplot(CC_genet_clusters, aes(x = fct_reorder(as_factor(clusters), Alteration_frequency_in_TCGA, .desc = FALSE), y = Alteration_frequency_in_TCGA))+
+  geom_boxplot(width = 0.7)+
+  scale_y_continuous(name="Alteration frequency in TCGA (%)", limits = c(0, 30)) +
+  xlab("Clusters") +
+  theme_classic()+
+  theme(legend.position="none")+
+  coord_flip()
+
+pdf(file = "Figure 2C-CC_genomics_HPV_inflamm_19clusters.pdf",width=2.84, height=3.66,useDingbats = FALSE)
+print(p)
+dev.off()
+
+#---------------------------------------------------------------------------------------------------
+#Load node tables for HPV/HIV propagation --- unomment to run for HIV/HPV preys 
+# HPV_HIV_subnetworks1 = fread("~/GitHub/Network_Modeling_HIV-HPV/Network_analysis_HIV_HPV/HPV_HIV_nodes.txt", header = T)
+# HPV_HIV_subnetworks = HPV_HIV_subnetworks1 %>% dplyr::select(nodes, clusters)
+# setnames(HPV_HIV_subnetworks, "nodes", "gene_symbol")
+# 
+# #PANCANCER and FIREHOSE MERGED
+# CC_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CC_all_HIV_clusters_pancancer.tsv"))
+# CC_TCGA1$freq1 = CC_TCGA1$num_samples_altered / 297 * 100
+# 
+# CC_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CC_all_HIV_clusters_firehouse.tsv"))
+# CC_TCGA2$freq2 = CC_TCGA2$num_samples_altered / 310 * 100
+# 
+# CC_combined = CC_TCGA1 %>%
+#      left_join(CC_TCGA2, by='gene_symbol')
+# CC_combined$Alteration_frequency_in_TCGA = (CC_combined$freq1 + CC_combined$freq2) / 2
+# 
+# #Extract genetic alter frequency for subnetwork nodes
+# CC_genet_clusters = CC_combined %>%
+#   left_join(HPV_HIV_subnetworks, by='gene_symbol')
+# 
+# #compare cervical cancer mut frequencies across clusters 
+# CC_genet_clusters = na.omit(CC_genet_clusters)
+# 
+# p = ggplot(CC_genet_clusters, aes(x = fct_reorder(as_factor(clusters), Alteration_frequency_in_TCGA, .desc = TRUE), y = Alteration_frequency_in_TCGA))+
+#   geom_boxplot(width = 0.7)+
+#   scale_y_continuous(name="Alteration frequency in TCGA (%)") +
+#   xlab("Clusters") +
+#   theme_classic() +
+#   theme(legend.position="none")
+# pdf(file = "Figure 4C-CC_genomics_HPV_HIV33clusters.pdf",width=2.84, height=3.66,useDingbats = FALSE)
+# print(p)
+# dev.off()
+
+#Select top 5 altered clusters for subsequent analyses
+
+```
+
+#Comparison of the alteration frequencies of the 5 selected clusters from previous chunks across different cancers
+
+```{r SIF/HPV networsk: Compare genetic alteration for selected clusters across different cancers---Uncomment this chunk if running SIF/HPV}
+#NB: EXTRACT THE ALTERATION FREQUENCIES (Mutation, CNA, mRNA and protein expression alterations) OF ALL NODES FOR COMMON CANCERS (lung, liver, cervical cancer, breast, colorectal and stomach) AMONG WOMEN FROM CBIOPORTAL DATABASE
+
+#Load alteration frequencies for the SIF/HPV network nodes
+#PANCANCER and FIREHOUSE MERGED
+#cervical cancer
+CC_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CC_all_inflamm_clusters_pancancer.tsv"))
+CC_TCGA1$freq1 = CC_TCGA1$num_samples_altered / 297 * 100
+
+CC_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CC_all_inflamm_clusters_firehouse.tsv"))
+CC_TCGA2$freq2 = CC_TCGA2$num_samples_altered / 310 * 100
+
+CC_combined = CC_TCGA1 %>%
+     left_join(CC_TCGA2, by='gene_symbol')
+CC_combined$Alteration_frequency_in_TCGA = (CC_combined$freq1 + CC_combined$freq2) / 2
+
+#Extract genetic alter frequency for subnetwork nodes
+CC_genet_clusters = CC_combined %>%
+  left_join(HPV_inflamm_subnetworks, by='gene_symbol')
+CC_genet_clusters$Cancer_type = rep("Cervical", nrow(CC_genet_clusters))
+
+#Lung
+LG_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/LUC_all_inflamm_clusters_pancancer.tsv"))
+LG_TCGA1$freq1 = LG_TCGA1$num_samples_altered / 566 * 100
+
+LG_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/LUC_all_inflamm_clusters_firehouse.tsv"))
+LG_TCGA2$freq2 = LG_TCGA2$num_samples_altered / 586 * 100
+
+LG_combined = LG_TCGA1 %>%
+     left_join(LG_TCGA2, by='gene_symbol')
+LG_combined$Alteration_frequency_in_TCGA = (LG_combined$freq1 + LG_combined$freq2) / 2
+
+#Extract genetic alter frequency for subnetwork nodes
+LG_genet_clusters = LG_combined %>%
+  left_join(HPV_inflamm_subnetworks, by='gene_symbol')
+LG_genet_clusters$Cancer_type = rep("Lung", nrow(LG_genet_clusters))
+
+#Breast
+BR_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/BR_all_inflamm_clusters_pancancer.tsv"))
+BR_TCGA1$freq1 = BR_TCGA1$num_samples_altered / 1084 * 100
+
+BR_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/BR_all_inflamm_clusters_firehouse.tsv"))
+BR_TCGA2$freq2 = BR_TCGA2$num_samples_altered / 1108 * 100
+
+BR_combined = BR_TCGA1 %>%
+     left_join(BR_TCGA2, by='gene_symbol')
+BR_combined$Alteration_frequency_in_TCGA = (BR_combined$freq1 + BR_combined$freq2) / 2
+
+#Extract genetic alter frequency for subnetwork nodes
+BR_genet_clusters = BR_combined %>%
+  left_join(HPV_inflamm_subnetworks, by='gene_symbol')
+BR_genet_clusters$Cancer_type = rep("Breast", nrow(BR_genet_clusters))
+
+#Colorectum
+CR_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/COL_all_inflamm_clusters_pancancer.tsv"))
+CR_TCGA1$freq1 = CR_TCGA1$num_samples_altered / 594 * 100
+
+CR_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/COL_all_inflamm_clusters_firehouse.tsv"))
+CR_TCGA2$freq2 = CR_TCGA2$num_samples_altered / 640 * 100
+
+CR_combined = CR_TCGA1 %>%
+     left_join(CR_TCGA2, by='gene_symbol')
+CR_combined$Alteration_frequency_in_TCGA = (CR_combined$freq1 + CR_combined$freq2) / 2
+
+#Extract genetic alter frequency for subnetwork nodes
+CR_genet_clusters = CR_combined %>%
+  left_join(HPV_inflamm_subnetworks, by='gene_symbol')
+CR_genet_clusters$Cancer_type = rep("Colorectal", nrow(CR_genet_clusters))
+
+#Liver
+LV_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/LVC_all_inflamm_clusters_pancancer.tsv"))
+LV_TCGA1$freq1 = CC_TCGA1$num_samples_altered / 372 * 100
+
+LV_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/LVC_all_inflamm_clusters_firehouse.tsv"))
+LV_TCGA2$freq2 = CC_TCGA2$num_samples_altered / 379 * 100
+LV_combined = LV_TCGA1 %>%
+     left_join(LV_TCGA2, by='gene_symbol')
+LV_combined$Alteration_frequency_in_TCGA = (LV_combined$freq1 + LV_combined$freq2) / 2
+
+#Extract genetic alter frequency for subnetwork nodes
+LV_genet_clusters = LV_combined %>%
+  left_join(HPV_inflamm_subnetworks, by='gene_symbol')
+LV_genet_clusters$Cancer_type = rep("Liver", nrow(LV_genet_clusters))
+
+#Stomach
+STOM_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/STOM_all_inflamm_clusters_pancancer.tsv"))
+STOM_TCGA1$freq1 = STOM_TCGA1$num_samples_altered / 440 * 100
+
+STOM_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/STOM_all_inflamm_clusters_firehouse.tsv"))
+STOM_TCGA2$freq2 = STOM_TCGA2$num_samples_altered / 478 * 100
+
+STOM_combined = STOM_TCGA1 %>%
+     left_join(STOM_TCGA2, by='gene_symbol')
+STOM_combined$Alteration_frequency_in_TCGA = (STOM_combined$freq1 + STOM_combined$freq2) / 2
+
+#Extract genetic alter frequency for subnetwork nodes
+STOM_genet_clusters = STOM_combined %>%
+  left_join(HPV_inflamm_subnetworks, by='gene_symbol')
+STOM_genet_clusters$Cancer_type = rep("Stomach", nrow(STOM_genet_clusters))
+
+#-----------------------------------------------------------------------------------------------------------
+
+#Merged df with all the clusters, genes and muts
+D_super_genet = rbind(CC_genet_clusters,LG_genet_clusters,LV_genet_clusters,BR_genet_clusters,CR_genet_clusters, STOM_genet_clusters)
+
+#Extract rows corresponding to Rho GTPpase pathway clusters
+Rhogtpase_subnetwork_selected = dplyr::filter(D_super_genet, clusters %in% c("15"))
+Rhogtpase_subnetwork_selected$Pathways = rep("Rho gtpase-15", nrow(Rhogtpase_subnetwork_selected))
+
+#Extract rows corresponding to DNA damage response pathway clusters
+DNAdam_subnetwork_selected = dplyr::filter(D_super_genet, clusters %in% c("13"))
+DNAdam_subnetwork_selected$Pathways = rep("DNA damage response-13", nrow(DNAdam_subnetwork_selected))
+
+#Extract rows corresponding to PI3K pathway clusters
+PI3K_subnetwork_selected = dplyr::filter(D_super_genet, clusters %in% c("9", "10", "14"))
+PI3K_subnetwork_selected$Pathways = rep("PI3K-AKT-9,10,14", nrow(PI3K_subnetwork_selected))
+
+#merge the 3 pathway data frames
+top5pathways = rbind(Rhogtpase_subnetwork_selected, DNAdam_subnetwork_selected, PI3K_subnetwork_selected)
+
+top5pathway_median_super = aggregate(top5pathways$Alteration_frequency_in_TCGA,
+by = list(top5pathways$Cancer_type, top5pathways$Pathways),
+FUN = function(x){median(x,na.rm=T)})
+
+#plot
+p = ggplot(top5pathway_median_super, aes(x = Group.2, y = x, label=Group.1)) +
+  geom_boxplot(color = "black") +
+  geom_point(size=3) +
+  scale_y_continuous(name="Alteration frequency in TCGA (%)") +
+  xlab("Pathways") +
+   geom_text_repel(check_overlap = TRUE,
+            position=position_jitter(width=0.2))+
+  theme_classic()
+
+pdf(file = "Figure 2E-topclusters_selected.pdf",width=3.74, height=3.86,useDingbats = FALSE)
+print(p)
+dev.off()
+
+#Plot bars comparing genet.alt for PIK3CA across the 6 cancers
+#combine datasets for ploting
+D_super = rbind(CC_genet_clusters,LG_genet_clusters,LV_genet_clusters,STOM_genet_clusters,BR_genet_clusters,CR_genet_clusters)
+D_super_sub = subset(D_super, gene_symbol == "PIK3CA")
+
+p = ggplot(D_super_sub, aes(x = fct_reorder(as_factor(Cancer_type), Alteration_frequency_in_TCGA, .desc = TRUE), y = Alteration_frequency_in_TCGA, fill=Cancer_type))+
+  geom_bar(stat='identity', width = 0.7)+
+  scale_y_continuous(name="PIK3CA alteration frequency in TCGA (%)") +
+  xlab("Cancer types") +
+  theme_classic()+
+  scale_fill_brewer(palette="Paired") +
+  theme(legend.position="none")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))+
+  coord_flip()
+
+pdf(file = "Figure 2F-PIK3CA_genomics_multiple_cancers.pdf",width=5, height=3.86,useDingbats = FALSE)
+print(p)
+dev.off()
+
+```
+
+```{r HIV/HPV networrk: Compare genetic alteration for selected clusters across different cancers --- Uncomment this chunk if running HPV/HIV}
+#NB: EXTRACT THE ALTERATION FREQUENCIES (Mutation, CNA, mRNA and protein expression alterations) OF ALL NODES FOR COMMON CANCERS (lung, liver, cervical cancer, breast, colorectal and stomach) AMONG WOMEN FROM CBIOPORTAL DATABASE
+
+#Load alteration frequencies for the HIV/HPV network nodes
+#PANCANCER and FIREHOUSE MERGED
+#cervical cancer
+# CC_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CC_all_HIV_clusters_pancancer.tsv"))
+# CC_TCGA1$freq1 = CC_TCGA1$num_samples_altered / 297 * 100
+# 
+# CC_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/CC_all_HIV_clusters_firehouse.tsv"))
+# CC_TCGA2$freq2 = CC_TCGA2$num_samples_altered / 310 * 100
+# 
+# CC_combined = CC_TCGA1 %>%
+#      left_join(CC_TCGA2, by='gene_symbol')
+# CC_combined$Alteration_frequency_in_TCGA = (CC_combined$freq1 + CC_combined$freq2) / 2
+# 
+# #Extract genetic alter frequency for subnetwork nodes
+# CC_genet_clusters = CC_combined %>%
+#   left_join(HPV_HIV_subnetworks, by='gene_symbol')
+# CC_genet_clusters$Cancer_type = rep("Cervical", nrow(CC_genet_clusters))
+# 
+# #Lung
+# LG_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/LUC_all_HIV_clusters_pancancer.tsv"))
+# LG_TCGA1$freq1 = LG_TCGA1$num_samples_altered / 566 * 100
+# 
+# LG_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/LUC_all_HIV_clusters_firehouse.tsv"))
+# LG_TCGA2$freq2 = LG_TCGA2$num_samples_altered / 586 * 100
+# 
+# LG_combined = LG_TCGA1 %>%
+#      left_join(LG_TCGA2, by='gene_symbol')
+# LG_combined$Alteration_frequency_in_TCGA = (LG_combined$freq1 + LG_combined$freq2) / 2
+# 
+# #Extract genetic alter frequency for subnetwork nodes
+# LG_genet_clusters = LG_combined %>%
+#   left_join(HPV_HIV_subnetworks, by='gene_symbol')
+# LG_genet_clusters$Cancer_type = rep("Lung", nrow(LG_genet_clusters))
+# 
+# #Breast
+# BR_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/BR_all_HIV_clusters_pancancer.tsv"))
+# BR_TCGA1$freq1 = BR_TCGA1$num_samples_altered / 1084 * 100
+# 
+# BR_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/BR_all_HIV_clusters_firehouse.tsv"))
+# BR_TCGA2$freq2 = BR_TCGA2$num_samples_altered / 1108 * 100
+# 
+# BR_combined = BR_TCGA1 %>%
+#      left_join(BR_TCGA2, by='gene_symbol')
+# BR_combined$Alteration_frequency_in_TCGA = (BR_combined$freq1 + BR_combined$freq2) / 2
+# 
+# #Extract genetic alter frequency for subnetwork nodes
+# BR_genet_clusters = BR_combined %>%
+#   left_join(HPV_HIV_subnetworks, by='gene_symbol')
+# BR_genet_clusters$Cancer_type = rep("Breast", nrow(BR_genet_clusters))
+# 
+# #Colorectum
+# CR_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/COL_all_HIV_clusters_pancancer.tsv"))
+# CR_TCGA1$freq1 = CR_TCGA1$num_samples_altered / 594 * 100
+# 
+# CR_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/COL_all_HIV_clusters_firehouse.tsv"))
+# CR_TCGA2$freq2 = CR_TCGA2$num_samples_altered / 640 * 100
+# 
+# CR_combined = CR_TCGA1 %>%
+#      left_join(CR_TCGA2, by='gene_symbol')
+# CR_combined$Alteration_frequency_in_TCGA = (CR_combined$freq1 + CR_combined$freq2) / 2
+# 
+# # #Extract genetic alter frequency for subnetwork nodes
+# CR_genet_clusters = CR_combined %>%
+#   left_join(HPV_HIV_subnetworks, by='gene_symbol')
+# CR_genet_clusters$Cancer_type = rep("Colorectal", nrow(CR_genet_clusters))
+# 
+# # #Liver
+# LV_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/LVC_all_HIV_clusters_pancancer.tsv"))
+# LV_TCGA1$freq1 = CC_TCGA1$num_samples_altered / 372 * 100
+# 
+# LV_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/LVC_all_HIV_clusters_firehouse.tsv"))
+# LV_TCGA2$freq2 = CC_TCGA2$num_samples_altered / 379 * 100
+# LV_combined = LV_TCGA1 %>%
+#      left_join(LV_TCGA2, by='gene_symbol')
+# LV_combined$Alteration_frequency_in_TCGA = (LV_combined$freq1 + LV_combined$freq2) / 2
+# 
+# #Extract genetic alter frequency for subnetwork nodes
+# LV_genet_clusters = LV_combined %>%
+#   left_join(HPV_HIV_subnetworks, by='gene_symbol')
+# LV_genet_clusters$Cancer_type = rep("Liver", nrow(LV_genet_clusters))
+# 
+# #Stomach
+# STOM_TCGA1 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/STOM_all_HIV_clusters_pancancer.tsv"))
+# STOM_TCGA1$freq1 = STOM_TCGA1$num_samples_altered / 440 * 100
+# 
+# STOM_TCGA2 = clean_names(fread("~/GitHub/Network_Modeling_HIV-HPV/InPut_dataset_and_functions/STOM_all_HIV_clusters_firehouse.tsv"))
+# STOM_TCGA2$freq2 = STOM_TCGA2$num_samples_altered / 478 * 100
+# 
+# STOM_combined = STOM_TCGA1 %>%
+#      left_join(STOM_TCGA2, by='gene_symbol')
+# STOM_combined$Alteration_frequency_in_TCGA = (STOM_combined$freq1 + STOM_combined$freq2) / 2
+# 
+# #Extract genetic alter frequency for subnetwork nodes
+# STOM_genet_clusters = STOM_combined %>%
+#   left_join(HPV_HIV_subnetworks, by='gene_symbol')
+# STOM_genet_clusters$Cancer_type = rep("Stomach", nrow(STOM_genet_clusters))
+# 
+# #-----------------------------------------------------------------------------------------------------------
+# 
+# #Merged df with all the clusters, genes and muts
+# D_super_HIVgenet = rbind(CC_genet_clusters,LG_genet_clusters,LV_genet_clusters,BR_genet_clusters,CR_genet_clusters, STOM_genet_clusters)
+# 
+# #Extract rows for selected networks that have Rhogtpase pathways
+# splicing_subnetwork_selected = dplyr::filter(D_super_HIVgenet, clusters %in% c("16", "23", "30", "32"))
+# splicing_subnetwork_selected$Pathways = rep("mRNA splicing-cluster 16, 23, 30, 32", nrow(splicing_subnetwork_selected))
+# 
+# #Extract rows for selected networks that have DNA damage response pathways
+# Hdr_ssa_subnetwork_selected = dplyr::filter(D_super_HIVgenet, clusters %in% c("33"))
+# Hdr_ssa_subnetwork_selected$Pathways = rep("HDR-ssa-33", nrow(Hdr_ssa_subnetwork_selected))
+# 
+# #merge the 3 pathway dfs
+# top5HIVpathways = rbind(splicing_subnetwork_selected, Hdr_ssa_subnetwork_selected)
+# 
+# top5HIVpathway_median_super = aggregate(top5HIVpathways$Alteration_frequency_in_TCGA,
+# by = list(top5HIVpathways$Cancer_type, top5HIVpathways$Pathways),
+# FUN = function(x){median(x,na.rm=T)})
+# 
+# #plot
+# p = ggplot(top5HIVpathway_median_super, aes(x = Group.2, y = x, label=Group.1)) +
+#   geom_boxplot(color = "black") +
+#   geom_point(col="forestgreen", size=3) +
+#   scale_y_continuous(name="Alteration frequency in TCGA (%)") +
+#   xlab("Pathways") +
+#    geom_text_repel(check_overlap = TRUE,
+#             position=position_jitter(width=0.2))+
+#   theme(legend.position="none")+
+#   theme_classic()
+# 
+# pdf(file = "Figure 4E-topclusters_selected.pdf",width=3.74, height=3.86,useDingbats = FALSE)
+# print(p)
+# dev.off()
+
+```
+
+```{r END}
+
+```

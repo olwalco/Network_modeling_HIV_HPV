@@ -1,0 +1,7 @@
+grade_hits	stage_hits
+C3	CD163
+SLAMF1	CCL23
+CD163	C3
+AHSG	AHSG
+MMP1	MMP1
+APOA1	IL6
